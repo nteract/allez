@@ -137,6 +137,109 @@ Given that feature description, do this:
    - The spec directory name and the git branch name are independent — they may be the same but that is the user's choice
    - The spec directory and file are always created by this command, never by the hook
 
+3b. **Gather cross-service context** (only if `JIRA_TICKET` is non-empty; skip this entire step if the user chose "no ticket"):
+
+   This ports the `require-jira` Spec Kit extension's research pipeline, but
+   runs inline as part of this command instead of through a separate hook —
+   no `.specify/extensions.yml`, no harness state machine.
+
+   a. **Verify Jira connectivity**: call `sesame_status`. Find the `jira` entry
+      in the returned `services` list.
+      - If Jira is missing or its status is not `connected`: STOP.
+        Report: `BLOCKED: Jira is not connected via Sesame (status=<status>).
+        Re-authenticate with: sesame auth jira — then retry /speckit.specify.`
+        Do not proceed to spec writing.
+      - Note the status of any other service (Slack, Confluence, GitHub,
+        Google Drive, Miro, Loom, Gmail) for steps c/d below. A disconnected
+        optional service only means its section is skipped or degraded — it
+        never blocks the command.
+
+   b. **Fetch the ticket, its parent/epic, and siblings** — spawn a subagent
+      (Task tool, `subagent_type=general`) with this prompt:
+
+      > Fetch full detail for Jira ticket `<JIRA_TICKET>` via
+      > `sesame_jira_get_issue`. Capture key, summary, issue_type, status,
+      > description, up to the last 5 comments, subtasks, labels, priority,
+      > parent, assignee, created, updated. If this call fails (ticket not
+      > found or no access), reply with exactly one line starting with
+      > `BLOCKED:` explaining why, and do nothing else.
+      >
+      > If `parent` is set, fetch it too via `sesame_jira_get_issue`
+      > (soft-fail: log and continue if this fails). If the parent was
+      > fetched, find its siblings via `sesame_jira_search(query="parent =
+      > <PARENT_KEY>", limit=50)`, excluding `<JIRA_TICKET>` itself (soft-fail
+      > the same way; note if the result was capped at 50).
+      >
+      > Write a markdown report to
+      > `<feature_dir>/research/fetch_parent_and_siblings.md` with sections:
+      > `## Main Ticket` (metadata table + `### Description` + `### Recent
+      > Comments (last 5)` + `### Sub-tasks` table), `## Parent / Epic`,
+      > `## Sibling Tickets` (table, or "No sibling tickets found."). Then
+      > reply with ONE paragraph summarizing what you found (ticket
+      > type/status, parent, sibling count) — do not paste the full report
+      > back into the conversation.
+
+      If the subagent's reply starts with `BLOCKED:`, stop the entire
+      `/speckit.specify` command and surface that message to the user.
+      Otherwise, note its one-paragraph summary and continue.
+
+   c. **Search Slack** (skip if Slack was reported disconnected in step a) —
+      spawn a subagent with this prompt:
+
+      > Read `<feature_dir>/research/fetch_parent_and_siblings.md` for
+      > context. Devise up to 5 `sesame_slack_search` queries most likely to
+      > surface discussion of this ticket (always include `<JIRA_TICKET>`
+      > itself). Run them (count=50 each). Read the results, then optionally
+      > run up to 2 more follow-up rounds (max 5 new queries in round 2, max
+      > 3 in round 3) chasing new leads (people, related tickets, feature
+      > names) — skip a round if the previous one returned 0 results or
+      > surfaced no new terms. Never repeat a query already tried.
+      >
+      > Group matched messages by thread, ordered chronologically by each
+      > thread's earliest match. Write
+      > `<feature_dir>/research/slack_search.md` with one `##` subsection per
+      > thread (channel name, earliest-match date/permalink, matched
+      > messages only — non-matching replies are omitted). If nothing was
+      > found, write "No Slack messages found. Queries tried: ...". Reply
+      > with ONE paragraph summarizing message/thread counts and queries used.
+
+      Never let this step block the command — always continue to step d
+      regardless of outcome.
+
+   d. **Follow links** — spawn a subagent with this prompt:
+
+      > Read `<feature_dir>/research/fetch_parent_and_siblings.md` and
+      > `<feature_dir>/research/slack_search.md` (if it exists). Scan both
+      > for URLs to: Confluence pages, GitHub issues/PRs/files, Google
+      > Docs/Sheets/Slides, Miro boards, Loom videos, Gmail messages.
+      > Deduplicate. Cap at 5 distinct URLs per service and 20 total fetches.
+      > Fetch each with the matching Sesame tool
+      > (`sesame_confluence_get_page`, `sesame_github_get_issue` /
+      > `sesame_github_get_pull_request` / `sesame_github_get_file_content`,
+      > `sesame_google_get_doc` / `_sheet` / `_slides`, `sesame_miro_get_board`,
+      > `sesame_loom_get_video`, `sesame_gmail_get_message`). Skip (soft-fail)
+      > any URL that errors or matches no pattern.
+      >
+      > Write `<feature_dir>/research/follow_links.md` with one `##`
+      > subsection per service that had a successful fetch (title/link + a
+      > short excerpt per item). If nothing was found or fetched, write "No
+      > linked resources were found or fetched." Reply with ONE paragraph
+      > summarizing what was fetched, by service.
+
+      Never let this step block the command.
+
+   e. **Assemble `context.md`**: run
+      `.specify/scripts/bash/assemble-jira-context.sh "<feature_dir>"
+      "<JIRA_TICKET>"`. This compiles the three research reports above into
+      `<feature_dir>/context.md` (ticket summary, description, comments,
+      parent/epic, siblings, sub-tasks, Slack discussion, linked resources —
+      sections that found nothing collapse to a one-line "none found").
+      If the script exits non-zero, report the error but do not abort the
+      command — spec writing can still proceed without `context.md`.
+
+   f. Read `<feature_dir>/context.md` (if it was produced) before writing the
+      spec in step 6 below, and ground the spec in it.
+
 4. Load the resolved active `spec-template` file to understand required sections.
 
 5. **IF EXISTS**: Load `.specify/memory/constitution.md` for project principles and governance constraints.
@@ -299,6 +402,7 @@ Check if `.specify/extensions.yml` exists in the project root.
 Report completion to the user with:
 - `SPECIFY_FEATURE_DIRECTORY` — the feature directory path
 - `SPEC_FILE` — the spec file path
+- `JIRA_TICKET` and `context.md` path — if a ticket was resolved and cross-service context was gathered (step 3b)
 - Checklist results summary
 - Readiness for the next phase (`/speckit.clarify` or `/speckit.plan`)
 

@@ -59,17 +59,41 @@ The text the user typed after `/speckit.specify` in the triggering message **is*
 
 Given that feature description, do this:
 
+0. **Check for a JIRA ticket in the description**:
+   - Look for a ticket in the format `GEN-XXXX` (1-5 digits, case-insensitive) anywhere in the feature description.
+   - If MULTIPLE tickets are found: ERROR "Please provide exactly one JIRA ticket per feature."
+   - If exactly ONE ticket is found: note it (uppercased) as `JIRA_TICKET` and proceed to step 1.
+   - If NO ticket is found, proceed to step 0b.
+
+0b. **Ask the user for a JIRA ticket** (only if step 0 found none):
+   - Present this prompt to the user:
+
+     ```markdown
+     I didn't find a JIRA ticket in your feature description.
+
+     **Please provide one of the following:**
+     1. A JIRA ticket number (e.g., `GEN-42`)
+     2. Type "no ticket" if you don't have one
+
+     **Note**: Never use placeholder ticket numbers. If you don't have a ticket yet, that's okay - just say "no ticket".
+     ```
+
+   - Wait for the user's response.
+   - If the user provides a ticket (e.g., "GEN-42"): validate it matches `GEN-XXXX` (1-5 digits), set `JIRA_TICKET` to it (uppercased), and proceed to step 1.
+   - If the user says "no ticket" / "don't have one" / "none" / similar: set `JIRA_TICKET` to empty and proceed to step 1.
+
 1. **Generate a concise short name** (2-4 words) for the feature:
+   - If `JIRA_TICKET` is set, exclude the ticket token from the description before extracting keywords — it must not appear in the short name
    - Analyze the feature description and extract the most meaningful keywords
    - Create a 2-4 word short name that captures the essence of the feature
    - Use action-noun format when possible (e.g., "add-user-auth", "fix-payment-bug")
    - Preserve technical terms and acronyms (OAuth2, API, JWT, etc.)
    - Keep it concise but descriptive enough to understand the feature at a glance
    - Examples:
-     - "I want to add user authentication" → "user-auth"
-     - "Implement OAuth2 integration for the API" → "oauth2-api-integration"
-     - "Create a dashboard for analytics" → "analytics-dashboard"
-     - "Fix payment processing timeout bug" → "fix-payment-timeout"
+     - "GEN-42 I want to add user authentication" → "user-auth"
+     - "GEN-99 Implement OAuth2 integration for the API" → "oauth2-api-integration"
+     - "Create a dashboard for analytics" (no ticket) → "analytics-dashboard"
+     - "Fix payment processing timeout bug" (no ticket) → "fix-payment-timeout"
 
 2. **Branch creation** (optional, via hook):
 
@@ -84,12 +108,15 @@ Given that feature description, do this:
    **Resolution order for `SPECIFY_FEATURE_DIRECTORY`**:
    1. If the user explicitly provided `SPECIFY_FEATURE_DIRECTORY` (e.g., via environment variable, argument, or configuration), use it as-is
    2. Otherwise, auto-generate it under `specs/`:
-      - Check `.specify/init-options.json` for `feature_numbering` (preferred) or `branch_numbering` (deprecated, migration only — will be removed in a future release)
-      - If `"timestamp"`: prefix is `YYYYMMDD-HHMMSS` (current timestamp)
-      - If `"sequential"` or absent: prefix is `NNN` (next available 3-digit number after scanning existing directories in `specs/`)
-      - Construct the directory name: `<prefix>-<short-name>` (e.g., `003-user-auth` or `20260319-143022-user-auth`)
+      - If `JIRA_TICKET` was resolved in step 0/0b (non-empty):
+        - Construct the directory name: `<JIRA_TICKET>-<short-name>` (e.g., `GEN-42-user-auth`)
+      - Otherwise (user confirmed "no ticket" in step 0b):
+        - Check `.specify/init-options.json` for `feature_numbering` (preferred) or `branch_numbering` (deprecated, migration only — will be removed in a future release)
+        - If `"timestamp"`: prefix is `YYYYMMDD-HHMMSS` (current timestamp)
+        - If `"sequential"` or absent: prefix is `NNN` (next available 3-digit number after scanning existing directories in `specs/`)
+        - Construct the directory name: `<prefix>-<short-name>` (e.g., `003-user-auth` or `20260319-143022-user-auth`)
+        - If `branch_numbering` was used (and `feature_numbering` was absent), emit a one-line warning: "⚠️ `branch_numbering` in init-options.json is deprecated. Rename to `feature_numbering`."
       - Set `SPECIFY_FEATURE_DIRECTORY` to `specs/<directory-name>`
-      - If `branch_numbering` was used (and `feature_numbering` was absent), emit a one-line warning: "⚠️ `branch_numbering` in init-options.json is deprecated. Rename to `feature_numbering`."
 
    **Create the directory and spec file**:
    - `mkdir -p SPECIFY_FEATURE_DIRECTORY`

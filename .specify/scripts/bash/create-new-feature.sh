@@ -8,6 +8,7 @@ ALLOW_EXISTING=false
 SHORT_NAME=""
 BRANCH_NUMBER=""
 USE_TIMESTAMP=false
+NO_TICKET=false
 ARGS=()
 i=1
 while [ $i -le $# ]; do
@@ -52,22 +53,33 @@ while [ $i -le $# ]; do
         --timestamp)
             USE_TIMESTAMP=true
             ;;
+        --no-ticket)
+            NO_TICKET=true
+            ;;
         --help|-h)
-            echo "Usage: $0 [--json] [--dry-run] [--allow-existing-branch] [--short-name <name>] [--number N] [--timestamp] <feature_description>"
+            echo "Usage: $0 [--json] [--dry-run] [--allow-existing-branch] [--short-name <name>] [--number N] [--timestamp] [--no-ticket] <feature_description>"
+            echo ""
+            echo "The feature description should contain a JIRA ticket in the format GEN-XXXX"
+            echo "(where XXXX is 1-5 digits). Use --no-ticket if you don't have a ticket."
             echo ""
             echo "Options:"
             echo "  --json              Output in JSON format"
             echo "  --dry-run           Compute feature name and paths without creating directories or files"
             echo "  --allow-existing-branch  Reuse an existing feature directory if it already exists"
             echo "  --short-name <name> Provide a custom short name (2-4 words) for the feature"
-            echo "  --number N          Specify branch number manually (overrides auto-detection)"
-            echo "  --timestamp         Use timestamp prefix (YYYYMMDD-HHMMSS) instead of sequential numbering"
+            echo "  --number N          Specify branch number manually (no-ticket mode only)"
+            echo "  --timestamp         Use timestamp prefix instead of sequential numbering (no-ticket mode only)"
+            echo "  --no-ticket         Create feature without a JIRA ticket prefix"
             echo "  --help, -h          Show this help message"
             echo ""
             echo "Examples:"
-            echo "  $0 'Add user authentication system' --short-name 'user-auth'"
-            echo "  $0 'Implement OAuth2 integration for API' --number 5"
-            echo "  $0 --timestamp --short-name 'user-auth' 'Add user authentication'"
+            echo "  $0 'GEN-42 Add user authentication system'"
+            echo "  $0 'GEN-42 Implement OAuth2 integration' --short-name 'oauth2-api'"
+            echo "  $0 --no-ticket 'Add user authentication system' --short-name 'user-auth'"
+            echo ""
+            echo "Directory naming formats:"
+            echo "  With ticket:    GEN-42-user-authentication"
+            echo "  Without ticket: 003-user-authentication (or timestamp-prefixed)"
             exit 0
             ;;
         *)
@@ -79,7 +91,7 @@ done
 
 FEATURE_DESCRIPTION="${ARGS[*]}"
 if [ -z "$FEATURE_DESCRIPTION" ]; then
-    echo "Usage: $0 [--json] [--dry-run] [--allow-existing-branch] [--short-name <name>] [--number N] [--timestamp] <feature_description>" >&2
+    echo "Usage: $0 [--json] [--dry-run] [--allow-existing-branch] [--short-name <name>] [--number N] [--timestamp] [--no-ticket] <feature_description>" >&2
     exit 1
 fi
 
@@ -88,6 +100,40 @@ FEATURE_DESCRIPTION=$(echo "$FEATURE_DESCRIPTION" | sed -E 's/^[[:space:]]+|[[:s
 if [ -z "$FEATURE_DESCRIPTION" ]; then
     echo "Error: Feature description cannot be empty or contain only whitespace" >&2
     exit 1
+fi
+
+# Function to extract exactly one JIRA ticket (GEN-XXXX, 1-5 digits) from the description
+extract_jira_ticket() {
+    local description="$1"
+    local tickets
+    tickets=$(printf '%s' "$description" | grep -oiE 'GEN-[0-9]{1,5}' | tr '[:lower:]' '[:upper:]' | sort -u)
+
+    local count
+    count=$(printf '%s\n' "$tickets" | grep -c 'GEN-' 2>/dev/null || true)
+    [ -z "$count" ] && count=0
+
+    if [ "$count" -eq 0 ]; then
+        echo "Error: No JIRA ticket found in description." >&2
+        echo "Either include a JIRA ticket (e.g., GEN-42) or use --no-ticket." >&2
+        exit 1
+    fi
+
+    if [ "$count" -gt 1 ]; then
+        echo "Error: Multiple JIRA tickets found in description: $(echo "$tickets" | tr '\n' ' ')" >&2
+        echo "Please provide exactly one JIRA ticket per feature." >&2
+        exit 1
+    fi
+
+    printf '%s' "$tickets"
+}
+
+# Extract JIRA ticket from description (unless --no-ticket flag is set), and strip
+# the ticket token out of the description used for short-name generation.
+JIRA_TICKET=""
+DESC_FOR_NAMING="$FEATURE_DESCRIPTION"
+if [ "$NO_TICKET" = false ]; then
+    JIRA_TICKET=$(extract_jira_ticket "$FEATURE_DESCRIPTION")
+    DESC_FOR_NAMING=$(printf '%s' "$FEATURE_DESCRIPTION" | sed -E 's/GEN-[0-9]{1,5}//gi')
 fi
 
 # Function to get highest number from specs directory
@@ -187,8 +233,8 @@ if [ -n "$SHORT_NAME" ]; then
     # Use provided short name, just clean it up
     BRANCH_SUFFIX=$(clean_branch_name "$SHORT_NAME")
 else
-    # Generate from description with smart filtering
-    BRANCH_SUFFIX=$(generate_branch_name "$FEATURE_DESCRIPTION")
+    # Generate from description (with the JIRA ticket, if any, stripped out) with smart filtering
+    BRANCH_SUFFIX=$(generate_branch_name "$DESC_FOR_NAMING")
 fi
 
 # Warn if --number and --timestamp are both specified
@@ -198,7 +244,13 @@ if [ "$USE_TIMESTAMP" = true ] && [ -n "$BRANCH_NUMBER" ]; then
 fi
 
 # Determine branch prefix
-if [ "$USE_TIMESTAMP" = true ]; then
+if [ -n "$JIRA_TICKET" ]; then
+    if [ "$USE_TIMESTAMP" = true ] || [ -n "$BRANCH_NUMBER" ]; then
+        >&2 echo "[specify] Warning: --number/--timestamp are ignored when a JIRA ticket is present"
+    fi
+    FEATURE_NUM="$JIRA_TICKET"
+    BRANCH_NAME="${JIRA_TICKET}-${BRANCH_SUFFIX}"
+elif [ "$USE_TIMESTAMP" = true ]; then
     FEATURE_NUM=$(date +%Y%m%d-%H%M%S)
     BRANCH_NAME="${FEATURE_NUM}-${BRANCH_SUFFIX}"
 else
@@ -275,25 +327,28 @@ if $JSON_MODE; then
                 --arg branch_name "$BRANCH_NAME" \
                 --arg spec_file "$SPEC_FILE" \
                 --arg feature_num "$FEATURE_NUM" \
-                '{BRANCH_NAME:$branch_name,SPEC_FILE:$spec_file,FEATURE_NUM:$feature_num,DRY_RUN:true}'
+                --arg jira_ticket "$JIRA_TICKET" \
+                '{BRANCH_NAME:$branch_name,SPEC_FILE:$spec_file,FEATURE_NUM:$feature_num,JIRA_TICKET:$jira_ticket,DRY_RUN:true}'
         else
             jq -cn \
                 --arg branch_name "$BRANCH_NAME" \
                 --arg spec_file "$SPEC_FILE" \
                 --arg feature_num "$FEATURE_NUM" \
-                '{BRANCH_NAME:$branch_name,SPEC_FILE:$spec_file,FEATURE_NUM:$feature_num}'
+                --arg jira_ticket "$JIRA_TICKET" \
+                '{BRANCH_NAME:$branch_name,SPEC_FILE:$spec_file,FEATURE_NUM:$feature_num,JIRA_TICKET:$jira_ticket}'
         fi
     else
         if [ "$DRY_RUN" = true ]; then
-            printf '{"BRANCH_NAME":"%s","SPEC_FILE":"%s","FEATURE_NUM":"%s","DRY_RUN":true}\n' "$(json_escape "$BRANCH_NAME")" "$(json_escape "$SPEC_FILE")" "$(json_escape "$FEATURE_NUM")"
+            printf '{"BRANCH_NAME":"%s","SPEC_FILE":"%s","FEATURE_NUM":"%s","JIRA_TICKET":"%s","DRY_RUN":true}\n' "$(json_escape "$BRANCH_NAME")" "$(json_escape "$SPEC_FILE")" "$(json_escape "$FEATURE_NUM")" "$(json_escape "$JIRA_TICKET")"
         else
-            printf '{"BRANCH_NAME":"%s","SPEC_FILE":"%s","FEATURE_NUM":"%s"}\n' "$(json_escape "$BRANCH_NAME")" "$(json_escape "$SPEC_FILE")" "$(json_escape "$FEATURE_NUM")"
+            printf '{"BRANCH_NAME":"%s","SPEC_FILE":"%s","FEATURE_NUM":"%s","JIRA_TICKET":"%s"}\n' "$(json_escape "$BRANCH_NAME")" "$(json_escape "$SPEC_FILE")" "$(json_escape "$FEATURE_NUM")" "$(json_escape "$JIRA_TICKET")"
         fi
     fi
 else
     echo "BRANCH_NAME: $BRANCH_NAME"
     echo "SPEC_FILE: $SPEC_FILE"
     echo "FEATURE_NUM: $FEATURE_NUM"
+    echo "JIRA_TICKET: $JIRA_TICKET"
     if [ "$DRY_RUN" != true ]; then
         printf '# To persist in your shell: export SPECIFY_FEATURE=%q\n' "$BRANCH_NAME"
         printf '#                           export SPECIFY_FEATURE_DIRECTORY=%q\n' "$FEATURE_DIR"

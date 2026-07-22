@@ -26,3 +26,8 @@ target
 /specs/*/context.md
 /specs/*/research
 /.specify/feature.json
+
+
+# Added by cargo
+
+/target

@@ -86,56 +86,43 @@ Given that feature description, do this:
    - If `JIRA_TICKET` is set, exclude the ticket token from the description before extracting keywords — it must not appear in the short name
    - Analyze the feature description and extract the most meaningful keywords
    - Create a 2-4 word short name that captures the essence of the feature
-   - Use action-noun format when possible (e.g., "add-user-auth", "fix-payment-bug")
+   - Use action-noun format when possible (e.g., "add_user_auth", "fix_payment_bug")
+   - Separate words with underscores (`_`), not hyphens — the only exception is a genuine hyphenated word (a compound conventionally hyphenated in English, e.g. "built-in", "cross-platform", "add-on"), which keeps its internal hyphen as a single word
    - Preserve technical terms and acronyms (OAuth2, API, JWT, etc.)
    - Keep it concise but descriptive enough to understand the feature at a glance
    - Examples:
-     - "GEN-42 I want to add user authentication" → "user-auth"
-     - "GEN-99 Implement OAuth2 integration for the API" → "oauth2-api-integration"
-     - "Create a dashboard for analytics" (no ticket) → "analytics-dashboard"
-     - "Fix payment processing timeout bug" (no ticket) → "fix-payment-timeout"
+     - "GEN-42 I want to add user authentication" → "user_auth"
+     - "GEN-99 Implement OAuth2 integration for the API" → "oauth2_api_integration"
+     - "Create a dashboard for analytics" (no ticket) → "analytics_dashboard"
+     - "Fix payment processing timeout bug" (no ticket) → "fix_payment_timeout"
+     - "GEN-456 Add a new built-in command" → "new_built-in_command" (hyphenated word "built-in" kept intact, still underscore-separated from the other words)
 
-2. **Branch creation** (optional, via hook):
-
-   If a `before_specify` hook ran successfully in the Pre-Execution Checks above, it will have created/switched to a git branch and output JSON containing `BRANCH_NAME` and `FEATURE_NUM`. Note these values for reference, but the branch name does **not** dictate the spec directory name.
-
-   If the user explicitly provided `GIT_BRANCH_NAME`, pass it through to the hook so the branch script uses the exact value as the branch name (bypassing all prefix/suffix generation).
-
-3. **Create the spec feature directory**:
+2. **Create the git branch and spec feature directory**:
 
    Specs live under the default `specs/` directory unless the user explicitly provides `SPECIFY_FEATURE_DIRECTORY`.
 
-   **Resolution order for `SPECIFY_FEATURE_DIRECTORY`**:
-   1. If the user explicitly provided `SPECIFY_FEATURE_DIRECTORY` (e.g., via environment variable, argument, or configuration), use it as-is
-   2. Otherwise, auto-generate it under `specs/`:
-      - If `JIRA_TICKET` was resolved in step 0/0b (non-empty):
-        - Construct the directory name: `<JIRA_TICKET>-<short-name>` (e.g., `GEN-42-user-auth`)
-      - Otherwise (user confirmed "no ticket" in step 0b):
-        - Check `.specify/init-options.json` for `feature_numbering` (preferred) or `branch_numbering` (deprecated, migration only — will be removed in a future release)
-        - If `"timestamp"`: prefix is `YYYYMMDD-HHMMSS` (current timestamp)
-        - If `"sequential"` or absent: prefix is `NNN` (next available 3-digit number after scanning existing directories in `specs/`)
-        - Construct the directory name: `<prefix>-<short-name>` (e.g., `003-user-auth` or `20260319-143022-user-auth`)
-        - If `branch_numbering` was used (and `feature_numbering` was absent), emit a one-line warning: "⚠️ `branch_numbering` in init-options.json is deprecated. Rename to `feature_numbering`."
-      - Set `SPECIFY_FEATURE_DIRECTORY` to `specs/<directory-name>`
+   **If the user explicitly provided `SPECIFY_FEATURE_DIRECTORY`** (e.g., via environment variable, argument, or configuration): use it as-is, skip the script call below, and instead `mkdir -p SPECIFY_FEATURE_DIRECTORY`, copy the resolved `spec-template` to `SPECIFY_FEATURE_DIRECTORY/spec.md`, and persist `{"feature_directory": "<resolved dir>"}` to `.specify/feature.json` directly. This override path intentionally bypasses branch-name-derived naming, so no git branch is created for it.
 
-   **Create the directory and spec file**:
-   - `mkdir -p SPECIFY_FEATURE_DIRECTORY`
-   - Resolve the active `spec-template` through the Spec Kit preset/template resolution stack (equivalent to `specify preset resolve spec-template`)
-   - Copy the resolved `spec-template` file to `SPECIFY_FEATURE_DIRECTORY/spec.md` as the starting point
-   - Set `SPEC_FILE` to `SPECIFY_FEATURE_DIRECTORY/spec.md`
-   - Persist the resolved path to `.specify/feature.json`:
-     ```json
-     {
-       "feature_directory": "<resolved feature dir>"
-     }
-     ```
-     Write the actual resolved directory path value (for example, `specs/003-user-auth`), not the literal string `SPECIFY_FEATURE_DIRECTORY`.
-     This allows downstream commands (`/speckit.plan`, `/speckit.tasks`, etc.) to locate the feature directory without relying on git branch name conventions.
+   **Otherwise (the common path)** — run `.specify/scripts/bash/create-new-feature.sh --json` to create the git branch, the spec feature directory, and `spec.md` in one step. Branch creation happens inside this script (a plain `git checkout -b`), not through a hook — there is no `.specify/extensions.yml` involved.
+
+   ```bash
+   .specify/scripts/bash/create-new-feature.sh --json --short-name "<short-name from step 1>" [--no-ticket] "<feature description>"
+   ```
+
+   - Omit `--no-ticket` when `JIRA_TICKET` was resolved in step 0/0b — the script extracts `GEN-XXXX` from the feature description itself and uses it as the branch/directory prefix (`<JIRA_TICKET>_<short-name>`, e.g. `GEN-42_user_auth` — the ticket number keeps its own internal dash, but the separator joining it to the short name, and joining words within the short name, is an underscore).
+   - Pass `--no-ticket` when the user confirmed "no ticket" in step 0b. In that mode the script numbers the directory sequentially (`NNN_<short-name>`) unless you also pass `--timestamp`.
+     - Check `.specify/init-options.json` for `feature_numbering` (preferred) or `branch_numbering` (deprecated, migration only — will be removed in a future release): if `"timestamp"`, pass `--timestamp`; if `"sequential"` or absent, pass neither flag (sequential is the script's default).
+     - If `branch_numbering` was used (and `feature_numbering` was absent), emit a one-line warning: "⚠️ `branch_numbering` in init-options.json is deprecated. Rename to `feature_numbering`."
+   - Pass `--allow-existing-branch` only if the user explicitly asked to resume/reuse an existing feature; otherwise let the script error out on a collision rather than silently overwriting one.
+
+   Parse the script's JSON stdout for `BRANCH_NAME`, `SPEC_FILE`, `FEATURE_NUM`, `JIRA_TICKET`. Set `SPECIFY_FEATURE_DIRECTORY` to the directory containing `SPEC_FILE`. The script already persisted `.specify/feature.json` — do not write it again.
+
+   If the script exits non-zero (e.g., the branch or directory already exists), surface its stderr message to the user verbatim and STOP. Do not fall back to manual `mkdir`/`git checkout` — a non-zero exit means something needs the user's attention (existing branch, dirty working tree, etc.), not a silent retry.
 
    **IMPORTANT**:
    - You must only create one feature per `/speckit.specify` invocation
-   - The spec directory name and the git branch name are independent — they may be the same but that is the user's choice
-   - The spec directory and file are always created by this command, never by the hook
+   - In the script-driven path, the git branch name and the spec directory name are the same value (`BRANCH_NAME`); they diverge only under the explicit `SPECIFY_FEATURE_DIRECTORY` override above
+   - Never re-implement the script's mkdir/cp/checkout/persist logic inline — always call the script itself so its git-branch, template-resolution, and `feature.json` behavior stay in one place
 
 3b. **Gather cross-service context** (only if `JIRA_TICKET` is non-empty; skip this entire step if the user chose "no ticket"):
 
@@ -406,7 +393,7 @@ Report completion to the user with:
 - Checklist results summary
 - Readiness for the next phase (`/speckit.clarify` or `/speckit.plan`)
 
-**NOTE:** Branch creation is handled by the `before_specify` hook (git extension). Spec directory and file creation are always handled by this core command.
+**NOTE:** Git branch creation, spec directory/file creation, and `.specify/feature.json` persistence are all handled directly by `.specify/scripts/bash/create-new-feature.sh` in step 2 — no hook, no `.specify/extensions.yml`.
 
 ## Quick Guidelines
 

@@ -1,0 +1,7 @@
+{
+  "channel_settings": [
+    {
+      "channel": "a\u0000b"
+    }
+  ]
+}

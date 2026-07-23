@@ -64,6 +64,23 @@
 //! `ALLEZ_CONFORMANCE_SKIP_CRATE` / `ALLEZ_CONFORMANCE_SKIP_OPENAPI`
 //! (set to `1` or `true`). See the `Makefile`'s `conformance-*` targets
 //! for running one checker at a time.
+//!
+//! ## Expected internal representation (conda only, `valid/` only)
+//!
+//! Accept/reject alone doesn't confirm a checker parsed a fixture's
+//! values *correctly* -- e.g. that `"yes"` really becomes the internal
+//! `true`, not just "some truthy-ish thing". For every fixture under
+//! `conformance/condarc/valid/`, once the conda checker accepts it,
+//! `valid_condarc_is_accepted` also calls
+//! [`assert_conda_expected_representation`], which re-derives conda's
+//! live internal representation (via
+//! `scripts/generate_zzz_condarc_expected_fixtures.py --fixture`, the
+//! exact same logic used to generate the checked-in
+//! `conformance/condarc/expected/<name>.json` files) and asserts it
+//! still matches what's checked in. There's no equivalent for
+//! `invalid/` fixtures (nothing parses, so there's no representation to
+//! record) or for the crate/openapi checkers (neither produces a value
+//! yet -- see `check_crate`/`check_openapi`).
 
 use std::env;
 use std::io::Write;
@@ -292,6 +309,124 @@ fn check_conda(value: &Value) -> CheckOutcome {
 }
 
 // ---------------------------------------------------------------------
+// conda "expected internal representation" check
+// ---------------------------------------------------------------------
+//
+// In addition to accept/reject, the conda oracle is also the only
+// checker today that can report *what* it parsed a valid fixture into
+// (GEN-36's crate doesn't exist yet, and `docs/condarc_openapi.json` is
+// schema-only -- neither produces a value, just accept/reject). This
+// reuses `scripts/generate_zzz_condarc_expected_fixtures.py` --
+// specifically its `--fixture PATH` mode, which computes and prints one
+// fixture's expected representation to stdout without touching
+// `conformance/condarc/expected/` at all -- so the exact same
+// alias-resolution/shadowed-attribute/canonicalization logic backs both
+// the checked-in fixtures and this live re-check, instead of drifting
+// apart as two separate implementations.
+
+/// Path to the generator script reused for computing conda's internal
+/// representation of a fixture -- see its module docs for the
+/// alias-resolution/shadowed-attribute logic this relies on.
+fn condarc_expected_script_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("scripts/generate_zzz_condarc_expected_fixtures.py")
+}
+
+/// The checked-in expected-representation fixture for `fixture_path`
+/// (e.g. `conformance/condarc/valid/foo.json` ->
+/// `conformance/condarc/expected/foo.json`), if one exists. `None` for
+/// fixtures the generator itself skips (currently just fixtures whose
+/// JSON root isn't an object, e.g. `null_root.json` -- see
+/// `has_no_keys_to_resolve` in that script).
+fn condarc_expected_fixture_path(fixture_path: &Path) -> Option<PathBuf> {
+    let name = fixture_path.file_name()?;
+    let candidate = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("conformance/condarc/expected")
+        .join(name);
+    candidate.is_file().then_some(candidate)
+}
+
+/// Asserts that conda's *live* internal representation of `fixture_path`
+/// -- recomputed right now, via the same oracle `check_conda` just used
+/// to accept it -- still matches the checked-in
+/// `conformance/condarc/expected/<name>.json`. Only meaningful once
+/// `check_conda` has already returned [`CheckOutcome::Valid`] for this
+/// fixture; callers must gate on that themselves (see
+/// `valid_condarc_is_accepted`), since there's no expected value to
+/// compare against a rejection.
+fn assert_conda_expected_representation(fixture_path: &Path) {
+    let Some(expected_path) = condarc_expected_fixture_path(fixture_path) else {
+        println!(
+            "SKIPPED [Conda expected] {}: no conformance/condarc/expected/ fixture for this \
+             one (its JSON root isn't an object, or the expected/ battery hasn't been \
+             regenerated since this fixture was added -- see \
+             scripts/generate_zzz_condarc_expected_fixtures.py)",
+            fixture_path.display(),
+        );
+        return;
+    };
+
+    let Some(python) = find_conda_python() else {
+        println!(
+            "SKIPPED [Conda expected] {}: no conda-capable python found",
+            fixture_path.display()
+        );
+        return;
+    };
+
+    let output = conda_free_command(&python)
+        .arg(condarc_expected_script_path())
+        .arg("--fixture")
+        .arg(fixture_path)
+        .output();
+
+    let output = match output {
+        Ok(o) => o,
+        Err(err) => {
+            println!(
+                "SKIPPED [Conda expected] {}: failed to run \
+                 generate_zzz_condarc_expected_fixtures.py: {err}",
+                fixture_path.display()
+            );
+            return;
+        }
+    };
+
+    assert!(
+        output.status.success(),
+        "[Conda expected] {} -- `generate_zzz_condarc_expected_fixtures.py --fixture` \
+         failed (exit={:?}), even though `check_conda` just accepted this same fixture: {}",
+        fixture_path.display(),
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr).trim(),
+    );
+
+    let actual: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|err| {
+        panic!(
+            "[Conda expected] {} -- `generate_zzz_condarc_expected_fixtures.py --fixture` \
+             did not print valid JSON: {err}\nstdout: {}",
+            fixture_path.display(),
+            String::from_utf8_lossy(&output.stdout),
+        )
+    });
+
+    let expected_text = std::fs::read_to_string(&expected_path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", expected_path.display()));
+    let expected: Value = serde_json::from_str(&expected_text)
+        .unwrap_or_else(|err| panic!("{} is not valid JSON: {err}", expected_path.display()));
+
+    assert_eq!(
+        actual, expected,
+        "[Conda expected] {} -- conda's live internal representation no longer matches {}. \
+         If this is an intentional behavior change (e.g. a conda upgrade changed coercion \
+         behavior), regenerate it with `make regenerate-condarc-fixtures` and review the \
+         diff.",
+        fixture_path.display(),
+        expected_path.display(),
+    );
+}
+
+// ---------------------------------------------------------------------
 // crate checker
 // ---------------------------------------------------------------------
 
@@ -461,7 +596,17 @@ fn valid_condarc_is_accepted(
 ) {
     let value = load_fixture(&path);
     let outcome = checker.check(&value);
+    let was_valid = matches!(outcome, CheckOutcome::Valid);
     assert_outcome(outcome, true, checker, &path);
+
+    // Beyond accept/reject, also check *what* conda parsed this fixture
+    // into against the checked-in conformance/condarc/expected/*.json --
+    // see the "conda expected internal representation" section above.
+    // Only conda has this today, and only once it has actually accepted
+    // the fixture (nothing to compare a rejection against).
+    if checker == Checker::Conda && was_valid {
+        assert_conda_expected_representation(&path);
+    }
 }
 
 #[rstest]

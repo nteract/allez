@@ -1,0 +1,14 @@
+{
+  "custom_channels": {
+    "123": "val"
+  },
+  "migrated_custom_channels": {
+    "123": "val"
+  },
+  "override_virtual_packages": {
+    "123": "val"
+  },
+  "proxy_servers": {
+    "123": "val"
+  }
+}

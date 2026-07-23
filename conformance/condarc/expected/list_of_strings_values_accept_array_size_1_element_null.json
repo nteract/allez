@@ -1,0 +1,56 @@
+{
+  "aggressive_update_packages": [
+    "None"
+  ],
+  "allowlist_channels": [
+    "None"
+  ],
+  "channels": [
+    "None"
+  ],
+  "create_default_packages": [
+    "None"
+  ],
+  "default_channels": [
+    "None"
+  ],
+  "denylist_channels": [
+    "None"
+  ],
+  "disallowed_packages": [
+    "None"
+  ],
+  "envs_dirs": [
+    "None"
+  ],
+  "experimental": [
+    "None"
+  ],
+  "export_platforms": [
+    "None"
+  ],
+  "migrated_channel_aliases": [
+    "None"
+  ],
+  "pinned_packages": [
+    "None"
+  ],
+  "pkgs_dirs": [
+    "None"
+  ],
+  "preview": [
+    "None"
+  ],
+  "repodata_fns": [
+    "None"
+  ],
+  "shortcuts_only": [
+    "None"
+  ],
+  "subdirs": [
+    "None"
+  ],
+  "track_features": [
+    "None"
+  ]
+}

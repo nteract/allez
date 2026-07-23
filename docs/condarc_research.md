@@ -966,3 +966,50 @@ exactly the kind of full-fidelity detail worth keeping, not just "it passed."
     (invalid for all 13 keys at once), and `numeric_values_reject_
     int_only_*` (valid for `float` but invalid for the 11 `int` keys,
     applied to the `int` keys only).
+15. **`conformance/condarc/expected/*.json` records conda's fully-typified
+    internal representation for every `conformance/condarc/valid/*.json`
+    fixture** (`scripts/generate_zzz_condarc_expected_fixtures.py`;
+    `tests/condarc_conformance.rs`'s `assert_conda_expected_representation`
+    re-checks it live on every test run, not just at generation time). A
+    few non-obvious things fell out of actually building this:
+    - **Reading a shadowed parameter's *public* attribute (rather than its
+      raw `ParameterLoader` attribute) leaks business logic that isn't
+      "internal representation" at all.** ~30 `Context` parameters store
+      their `ParameterLoader` under a private, underscore-prefixed name
+      (e.g. `_custom_multichannels`) and expose a same-named-minus-underscore
+      `@property` (`custom_multichannels`) that layers extra logic on top --
+      for `custom_multichannels`/`custom_channels` specifically, that
+      resolves plain channel-name strings into full `Channel` objects with
+      real URLs, and branches on `on_win`/`self.subdir`, so the *public*
+      value's exact shape can differ between an ARM Mac and a Linux CI
+      runner given the identical `.condarc`. Always reading the loader's own
+      attribute name directly (`context._custom_multichannels`, which skips
+      the property entirely) instead gives the raw, portable, pre-business-
+      logic value. `Configuration.name_for_alias()` can't be used to find
+      the *right* attribute name for this, either: it silently excludes any
+      parameter whose primary loader name is itself private
+      (`ignore_private=True` is its only mode used anywhere in this
+      codebase), which is exactly the shadowed set -- e.g.
+      `name_for_alias("channel")` returns `None`, not `"channels"`. The
+      generator instead builds its own alias -> loader-attribute-name map
+      directly from every `ParameterLoader._names`, and always reads via
+      that raw attribute name.
+    - **Two of item 14's numeric-storage risks are real JSON *encoding*
+      problems, not just cross-implementation *semantic* risks.** `float`
+      keys' `+inf`/`-inf`/`NaN` values, and `int` keys' arbitrary-precision
+      bignums outside `i64`/`u64` range, both have no representation
+      `serde_json::Value`'s default `Number` (no `arbitrary_precision`
+      feature; this repo doesn't enable it) can parse -- Python's own
+      `json.dumps` happily emits the non-standard bare tokens
+      `NaN`/`Infinity`/`-Infinity`, and happily emits an arbitrarily long
+      bare integer literal, both of which are either non-standard JSON or
+      syntactically valid JSON no consumer with a fixed-width number type
+      can parse. `generate_zzz_condarc_expected_fixtures.py`'s
+      `canonicalize()` encodes both cases as JSON *strings* instead (the
+      literal `"NaN"`/`"Infinity"`/`"-Infinity"`, or the integer's decimal
+      digits as text) rather than bare numeric literals -- any future
+      comparison against these fixtures needs to know that convention.
+      (Caught empirically: `assert_conda_expected_representation` failed
+      with a `serde_json` "number out of range" parse error on
+      `numeric_values_accept_numeric_string_bignum_exceeds_f64_max_finite
+      .json` before this fix.)

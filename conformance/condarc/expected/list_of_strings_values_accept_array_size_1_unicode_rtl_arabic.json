@@ -1,0 +1,56 @@
+{
+  "aggressive_update_packages": [
+    "\u0645\u0631\u062d\u0628\u0627"
+  ],
+  "allowlist_channels": [
+    "\u0645\u0631\u062d\u0628\u0627"
+  ],
+  "channels": [
+    "\u0645\u0631\u062d\u0628\u0627"
+  ],
+  "create_default_packages": [
+    "\u0645\u0631\u062d\u0628\u0627"
+  ],
+  "default_channels": [
+    "\u0645\u0631\u062d\u0628\u0627"
+  ],
+  "denylist_channels": [
+    "\u0645\u0631\u062d\u0628\u0627"
+  ],
+  "disallowed_packages": [
+    "\u0645\u0631\u062d\u0628\u0627"
+  ],
+  "envs_dirs": [
+    "\u0645\u0631\u062d\u0628\u0627"
+  ],
+  "experimental": [
+    "\u0645\u0631\u062d\u0628\u0627"
+  ],
+  "export_platforms": [
+    "\u0645\u0631\u062d\u0628\u0627"
+  ],
+  "migrated_channel_aliases": [
+    "\u0645\u0631\u062d\u0628\u0627"
+  ],
+  "pinned_packages": [
+    "\u0645\u0631\u062d\u0628\u0627"
+  ],
+  "pkgs_dirs": [
+    "\u0645\u0631\u062d\u0628\u0627"
+  ],
+  "preview": [
+    "\u0645\u0631\u062d\u0628\u0627"
+  ],
+  "repodata_fns": [
+    "\u0645\u0631\u062d\u0628\u0627"
+  ],
+  "shortcuts_only": [
+    "\u0645\u0631\u062d\u0628\u0627"
+  ],
+  "subdirs": [
+    "\u0645\u0631\u062d\u0628\u0627"
+  ],
+  "track_features": [
+    "\u0645\u0631\u062d\u0628\u0627"
+  ]
+}

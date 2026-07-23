@@ -1,0 +1,56 @@
+{
+  "aggressive_update_packages": [
+    "\u65e5\u672c\u8a9e"
+  ],
+  "allowlist_channels": [
+    "\u65e5\u672c\u8a9e"
+  ],
+  "channels": [
+    "\u65e5\u672c\u8a9e"
+  ],
+  "create_default_packages": [
+    "\u65e5\u672c\u8a9e"
+  ],
+  "default_channels": [
+    "\u65e5\u672c\u8a9e"
+  ],
+  "denylist_channels": [
+    "\u65e5\u672c\u8a9e"
+  ],
+  "disallowed_packages": [
+    "\u65e5\u672c\u8a9e"
+  ],
+  "envs_dirs": [
+    "\u65e5\u672c\u8a9e"
+  ],
+  "experimental": [
+    "\u65e5\u672c\u8a9e"
+  ],
+  "export_platforms": [
+    "\u65e5\u672c\u8a9e"
+  ],
+  "migrated_channel_aliases": [
+    "\u65e5\u672c\u8a9e"
+  ],
+  "pinned_packages": [
+    "\u65e5\u672c\u8a9e"
+  ],
+  "pkgs_dirs": [
+    "\u65e5\u672c\u8a9e"
+  ],
+  "preview": [
+    "\u65e5\u672c\u8a9e"
+  ],
+  "repodata_fns": [
+    "\u65e5\u672c\u8a9e"
+  ],
+  "shortcuts_only": [
+    "\u65e5\u672c\u8a9e"
+  ],
+  "subdirs": [
+    "\u65e5\u672c\u8a9e"
+  ],
+  "track_features": [
+    "\u65e5\u672c\u8a9e"
+  ]
+}

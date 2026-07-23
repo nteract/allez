@@ -1,0 +1,9 @@
+{
+  "channel_settings": [
+    {
+      "auth": "test-auth-handler",
+      "channel": "https://some.custom/channel",
+      "user": "my-user-account"
+    }
+  ]
+}

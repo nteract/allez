@@ -1,0 +1,6 @@
+{
+  "always_copy": true,
+  "always_softlink": false,
+  "client_ssl_cert": "/tmp/cert.pem",
+  "client_ssl_cert_key": "/tmp/cert-key.pem"
+}

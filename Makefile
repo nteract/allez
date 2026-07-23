@@ -34,7 +34,7 @@ conformance-openapi: ## Run only the openapi-schema condarc conformance checks (
 	touch $(CONFORMANCE_TEST_FILE)
 	ALLEZ_CONFORMANCE_SKIP_CONDA=1 ALLEZ_CONFORMANCE_SKIP_CRATE=1 $(CONFORMANCE_TEST) -- --nocapture
 
-regenerate-condarc-fixtures: ## Delete every condarc fixture and rerun all scripts/generate_*.py against a real conda oracle (every fixture, including former hand-authored root-shape ones, is now owned by a generator -- see generate_root_shape_condarc_fixtures.py)
+regenerate-condarc-fixtures: ## Delete every condarc fixture (and conformance/condarc/expected/*.json) and rerun all scripts/generate_*.py against a real conda oracle (every fixture, including former hand-authored root-shape ones, is now owned by a generator -- see generate_root_shape_condarc_fixtures.py; conformance/condarc/expected/ is regenerated last, by generate_zzz_condarc_expected_fixtures.py -- see that script for why it must sort last in this loop)
 	find $(CONFORMANCE_VALID_DIR) $(CONFORMANCE_INVALID_DIR) -maxdepth 1 -name '*.json' -delete
 	@for script in scripts/generate_*.py; do \
 		echo "=== $$script ==="; \

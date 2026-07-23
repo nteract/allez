@@ -1,0 +1,56 @@
+{
+  "aggressive_update_packages": [
+    "caf\u00e9"
+  ],
+  "allowlist_channels": [
+    "caf\u00e9"
+  ],
+  "channels": [
+    "caf\u00e9"
+  ],
+  "create_default_packages": [
+    "caf\u00e9"
+  ],
+  "default_channels": [
+    "caf\u00e9"
+  ],
+  "denylist_channels": [
+    "caf\u00e9"
+  ],
+  "disallowed_packages": [
+    "caf\u00e9"
+  ],
+  "envs_dirs": [
+    "caf\u00e9"
+  ],
+  "experimental": [
+    "caf\u00e9"
+  ],
+  "export_platforms": [
+    "caf\u00e9"
+  ],
+  "migrated_channel_aliases": [
+    "caf\u00e9"
+  ],
+  "pinned_packages": [
+    "caf\u00e9"
+  ],
+  "pkgs_dirs": [
+    "caf\u00e9"
+  ],
+  "preview": [
+    "caf\u00e9"
+  ],
+  "repodata_fns": [
+    "caf\u00e9"
+  ],
+  "shortcuts_only": [
+    "caf\u00e9"
+  ],
+  "subdirs": [
+    "caf\u00e9"
+  ],
+  "track_features": [
+    "caf\u00e9"
+  ]
+}

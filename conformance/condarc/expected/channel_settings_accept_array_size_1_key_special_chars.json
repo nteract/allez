@@ -1,0 +1,7 @@
+{
+  "channel_settings": [
+    {
+      "my.key:with/chars": "x"
+    }
+  ]
+}

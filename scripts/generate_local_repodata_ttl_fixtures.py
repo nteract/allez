@@ -18,6 +18,15 @@ Unlike the shared boolish battery, fixtures here set *only*
 "simultaneously valid for multiple keys" question for a dedicated,
 single-key battery.
 
+Also covers the numeric-*specific* edges of `_Regex.INT` (leading `+`
+sign, leading zeros) that the original boolish-token-focused CANDIDATES
+list didn't exercise -- this key is `(bool, int)`, not just boolish, so
+its valid battery should be as exhaustive about integer-string shapes as
+it already is about boolean-string casing. See the sibling
+`generate_local_repodata_ttl_reject_fixtures.py` for the corresponding
+numeric-*rejection* edges (octal/binary literal crashes, float/scientific
+notation, numeric-sounding words).
+
 Every candidate is still verified empirically against a real `conda`
 installation before a fixture is written, for the same self-correcting
 reason as the other generators in this directory.
@@ -96,6 +105,19 @@ CANDIDATES: list[tuple[str, object]] = [
     # whitespace-preserving special case never applies here either.
     ("string_whitespace_padded", " true "),
     ("string_whitespace_padded_tabs_and_newlines", "\t\nyes\n\t"),
+    # _Regex.INT (`^[-+]?\\d+$`) explicitly allows a leading `+`, distinct
+    # from the leading `-` already covered by `numeric_string_negative_one`
+    # -- both sign characters are part of the same regex alternation, but
+    # only `-` was previously exercised.
+    ("string_signed_positive_int", "+1"),
+    # Leading zeros are *not* octal in Python's `int(...)` constructor
+    # (unlike a literal `0o...` source-code token) -- `int("007") == 7`,
+    # and `_Regex.INT` has no special-case for a leading zero, so this
+    # converts cleanly instead of colliding with `_Regex.OCT`'s `0o`-prefix
+    # requirement (see the dedicated octal-literal-string case in the
+    # *reject* battery, which requires the `0o`/`0O` prefix `_Regex.OCT`
+    # actually matches on).
+    ("numeric_string_leading_zero", "007"),
 ]
 
 CONDA_CHECK_SCRIPT = """

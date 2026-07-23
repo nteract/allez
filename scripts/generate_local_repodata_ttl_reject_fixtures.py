@@ -14,6 +14,18 @@ coercion function (`typify_str_no_hint`, a hand-rolled regex table) --
 plus the two type-agnostic collection-crash cases (§8 item 7) that apply
 here too, for completeness of this key's own battery.
 
+Also covers the full breadth of `_Regex`'s *numeric* patterns
+(`conda/auxlib/type_coercion.py`) beyond the single representative
+hex-literal/decimal-string/complex-number cases originally present:
+`_Regex.OCT`/`.BIN` share the exact same backwards-builtin crash bug as
+`_Regex.HEX` (§8 item 9 only names HEX explicitly, but OCT/BIN are
+identically broken); `_Regex.FLOAT` matches considerably more shapes than
+a bare `"1.0"` (signs, scientific notation, leading/trailing bare `.`);
+and a couple of numeric-*sounding* words (`"nan"`, `"inf"`) that Python's
+own `float()` would parse but `_Regex.FLOAT` (digit-anchored) does not,
+so they fail via yet another distinct mechanism (unmatched string, no
+crash) worth its own fixtures.
+
 Every candidate is still verified empirically against a real `conda`
 installation before a fixture is written -- if a candidate unexpectedly
 turns out to be *accepted*, it is reported as SKIPPED rather than
@@ -97,6 +109,41 @@ CANDIDATES: list[tuple[str, object]] = [
     # unhandled `TypeError: 'str' object cannot be interpreted as an
     # integer` -- see docs/condarc_research.md §8 item 9.
     ("string_hex_literal", "0x1A"),
+    # The same backwards-builtin crash bug as string_hex_literal above,
+    # but for _Regex.OCT (`^[-+]?0[oO][0-7]+$` -> builtin `oct`) and
+    # _Regex.BIN (`^[-+]?0[bB][01]+$` -> builtin `bin`) respectively.
+    # §8 item 9 only calls out HEX explicitly by name, but the same
+    # int-to-string-backwards bug applies identically to all three
+    # regex/typish pairs -- empirically confirmed to raise the identical
+    # `TypeError: 'str' object cannot be interpreted as an integer`.
+    ("string_octal_literal", "0o17"),
+    ("string_binary_literal", "0b101"),
+    # _Regex.FLOAT (`^[-+]?(\\d+(\\.\\d*)?|\\.\\d+)([eE][-+]?\\d+)?$`) is
+    # considerably broader than the single decimal-string shape already
+    # covered by string_decimal_string ("1.0") -- it also matches
+    # exponential/scientific notation, a leading `-`/`+` sign, a leading
+    # bare `.` with no integer part, and a trailing `.` with no fractional
+    # part. Every one of these converts cleanly to an actual Python
+    # `float` (never crashes, unlike HEX/OCT/BIN above), which is simply
+    # not a member of local_repodata_ttl's `(bool, int)` element_type --
+    # a clean InvalidTypeError, same mechanism as string_decimal_string,
+    # but exercising regex branches that a single "1.0" fixture doesn't.
+    ("string_scientific_notation", "1e10"),
+    ("string_scientific_notation_negative_exponent", "-1.5e-3"),
+    ("string_negative_float", "-1.5"),
+    ("string_positive_signed_float", "+1.5"),
+    ("string_leading_dot_float", ".5"),
+    ("string_trailing_dot_float", "1."),
+    # Numeric-*sounding* words that Python's own `float()`/`complex()`
+    # constructors would happily parse (`float("nan")`, `float("inf")`),
+    # but which _Regex.FLOAT/.COMPLEX (both require at least one digit)
+    # do NOT match -- so these stay unmatched `str` values, same clean
+    # rejection mechanism as string_non_token, just numeric-flavored
+    # rather than boolish-flavored. Distinct from string_hex_literal/etc.
+    # in that no regex matches at all here, so there's no crash -- just a
+    # plain failed `isinstance(typed_value, (bool, int))` check.
+    ("string_nan_token", "nan"),
+    ("string_infinity_token", "inf"),
     # A bare YAML/JSON null literal. Not in (bool, int) -- and unlike the
     # boolify()-based keys (where str(None).lower() == "none" is itself a
     # BOOLISH_FALSE token, so None round-trips to False), local_repodata_ttl

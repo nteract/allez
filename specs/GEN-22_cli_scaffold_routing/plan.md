@@ -81,11 +81,11 @@ src/
 ├── cli/
 │   ├── mod.rs             # Cli struct (with global --human/--verbose flags, JSON default), Commands enum, top-level parse+dispatch, shared Args structs, validate_pass_through() helper, parse_nonempty_path() shared value_parser (FR-015)
 │   ├── oneshot.rs         # stub handler consuming PackagesAndCommandArgs (T006) (validate_pass_through() is called by main.rs's dispatch before this handler is invoked, not from within it)
-│   ├── create.rs          # CreateArgs (path via parse_nonempty_path + packages; independent type, no PassThroughArgs/PackagesAndCommandArgs — create has no pass-through command) + stub handler
-│   ├── run.rs              # RunArgs (path via parse_nonempty_path + PassThroughArgs) + stub handler (validate_pass_through() called by main.rs's dispatch, as with oneshot)
+│   ├── create.rs          # CreateArgs (env_path via parse_nonempty_path + packages; independent type, no PassThroughArgs/PackagesAndCommandArgs — create has no pass-through command) + stub handler
+│   ├── run.rs              # RunArgs (env_path via parse_nonempty_path + PassThroughArgs) + stub handler (validate_pass_through() called by main.rs's dispatch, as with oneshot)
 │   ├── sandbox.rs         # SandboxArgs (PassThroughArgs, optional) + stub handler — main.rs's dispatch does not call validate_pass_through() unmodified for this arm; it instead runs a distinct raw-argv `--`-presence check (see research.md Decision 1) to reject `--` present-with-nothing-after while still accepting `--` absent entirely
 │   ├── list.rs              # ListArgs (empty) + stub handler
-│   └── remove.rs          # RemoveArgs (path via parse_nonempty_path) + stub handler
+│   └── remove.rs          # RemoveArgs (env_path via parse_nonempty_path) + stub handler
 ├── output.rs               # --human/--verbose selection: json (default) vs. human rendering of stub acknowledgments in the fixed {schema_version, subcommand, status, parsed} shape (FR-014), with pass-through program/args redacted by default and revealed under --verbose (FR-016)
 ├── error.rs                 # AllezError enum; maps to clap's exit-code convention (0/2); each variant's category name (missing_argument/unknown_subcommand/unknown_flag/missing_pass_through_command, FR-017) is the single source of truth for the JSON error body's `category` field — no separate hand-maintained string list
 └── observability.rs      # tracing-subscriber init (human/json formatter, stderr writer)

@@ -1,16 +1,9 @@
-//! Integration tests for `allez`'s CLI scaffold and subcommand routing
-//! (spec.md User Stories 1 and 2). Runs the compiled binary via
-//! `assert_cmd` and inspects stdout/stderr/exit code — the spec's
-//! acceptance scenarios are expressed in terms of observable process
-//! behavior, not internal function calls.
-
 use assert_cmd::Command;
 use predicates::prelude::*;
 use rstest::rstest;
 use serde_json::Value;
 
-/// Runs the compiled `allez` binary with `args` and returns
-/// `(exit_code, stdout, stderr)` as UTF-8 strings.
+/// Runs the compiled `allez` binary; returns `(exit_code, stdout, stderr)`.
 fn run_allez(args: &[&str]) -> (i32, String, String) {
     let output = Command::cargo_bin("allez")
         .expect("allez binary should build")
@@ -24,10 +17,6 @@ fn run_allez(args: &[&str]) -> (i32, String, String) {
 }
 
 const SUBCOMMANDS: [&str; 6] = ["oneshot", "create", "run", "sandbox", "list", "remove"];
-
-// ---------------------------------------------------------------------
-// User Story 1: discoverability (T011-T013A)
-// ---------------------------------------------------------------------
 
 #[test]
 fn t011_help_lists_all_six_subcommands_with_usage() {
@@ -78,11 +67,9 @@ fn t013a_version_exits_0_and_prints_version_string() {
         .stdout(predicate::str::contains(env!("CARGO_PKG_VERSION")));
 }
 
-/// spec.md Edge Cases: "Does `--help`/`--version` output ever render as
-/// JSON? (No...)" — FR-013's Scope exclusion. Closes a gap found during
-/// T048's spec-coverage cross-check: T011/T013A already assert plain-text
-/// substrings are present, but neither positively confirms the output is
-/// *not* JSON.
+/// Confirms `--help`/`--version` output is never JSON: the existing
+/// discoverability tests only assert plain-text substrings are present,
+/// none of them positively rule out JSON.
 #[rstest]
 #[case(&["--help"])]
 #[case(&["--version"])]
@@ -95,10 +82,6 @@ fn t048_help_and_version_output_is_never_json(#[case] args: &[&str]) {
         "args={args:?} stdout should be plain text, not JSON: {stdout}"
     );
 }
-
-// ---------------------------------------------------------------------
-// User Story 2: correct parsing/routing per subcommand (T016-T023I)
-// ---------------------------------------------------------------------
 
 #[test]
 fn t016_oneshot_with_packages_and_command_identifies_parsed_values() {
@@ -367,10 +350,6 @@ fn t023i_human_flag_before_subcommand_matches_after_for_oneshot_with_args() {
     assert_eq!(stdout_before, stdout_after);
 }
 
-// ---------------------------------------------------------------------
-// User Story 3: consistent, actionable errors on invalid input (T031-T038B)
-// ---------------------------------------------------------------------
-
 /// Runs `allez` with `args`, asserts exit code `2`, an empty stdout, and a
 /// JSON error body on stderr matching `expected_category`. Returns the
 /// parsed error body for callers that need to inspect it further.
@@ -465,12 +444,10 @@ fn t038_all_usage_errors_share_exit_code_category_and_stderr_convention(
     #[case] args: &[&str],
     #[case] expected_category: &str,
 ) {
-    // Default (JSON) mode: exit 2, empty stdout, JSON error body on stderr.
     assert_usage_error(args, expected_category);
 
-    // `--human` mode (placed before the subcommand, per FR-013's Placement
-    // rule): still exit 2, still empty stdout, still a non-empty message on
-    // stderr — but no longer JSON, so we don't re-parse it as such.
+    // `--human` mode: still exit 2 and empty stdout, but the stderr
+    // message is no longer JSON, so it isn't re-parsed as such.
     let mut human_args: Vec<&str> = vec!["--human"];
     human_args.extend_from_slice(args);
     let (code, stdout, stderr) = run_allez(&human_args);
@@ -492,14 +469,10 @@ fn t038_all_usage_errors_share_exit_code_category_and_stderr_convention(
 fn t038a_empty_separator_and_flag_like_token_preservation_uniform_across_pass_through_subcommands(
     #[case] prefix: &[&str],
 ) {
-    // The empty-separator case (`--` present, nothing after) is a usage
-    // error for all three, sharing `missing_pass_through_command`.
     let mut empty_sep_args: Vec<&str> = prefix.to_vec();
     empty_sep_args.push("--");
     assert_usage_error(&empty_sep_args, "missing_pass_through_command");
 
-    // A flag-like token (`-c`) after `--` is preserved verbatim, not
-    // reinterpreted as an allez flag, for all three.
     let mut verbose_args: Vec<&str> = prefix.to_vec();
     verbose_args.push("--verbose");
     verbose_args.push("--");
@@ -526,8 +499,6 @@ fn t038b_global_flag_spelled_tokens_after_separator_are_forwarded_verbatim_not_r
     args.extend_from_slice(command_args);
     let (code, stdout, _stderr) = run_allez(&args);
     assert_eq!(code, 0, "args={args:?}");
-    // Default JSON format is preserved: a `--human`-spelled token after
-    // `--` did not flip the output to human-readable text.
     let v: Value = serde_json::from_str(&stdout).expect("valid JSON");
     let pass_through = &v["parsed"]["pass_through"];
     let program = pass_through["program"]
@@ -543,20 +514,13 @@ fn t038b_global_flag_spelled_tokens_after_separator_are_forwarded_verbatim_not_r
     assert_eq!(forwarded_args, command_args[1..]);
 }
 
-// ---------------------------------------------------------------------
-// Post-review remediation regressions (see specs/GEN-22_cli_scaffold_routing
-// /tasks.md Phase 7 and the review that flagged T055/T057/T058 plus the
-// unrecognized-flag mislabeling, repeated-global-flag, and
-// flag-only/no-subcommand UX findings)
-// ---------------------------------------------------------------------
-
 /// Extra, unconsumable positional arguments (`list foo`, `remove ./env
 /// extra`, `sandbox foo`) previously rendered `message: "unrecognized
 /// flag"` even though no flag was involved — clap's `UnknownArgument` kind
 /// covers both cases, but the fixed per-category `AllezError::Display`
 /// text used to hardcode flag-specific wording. `category` stays
-/// `unknown_flag` (FR-017's enum is frozen), but `message` must now come
-/// from clap's own precise text instead.
+/// `unknown_flag`, but `message` must now come from clap's own precise
+/// text instead.
 #[rstest]
 #[case(&["list", "foo"])]
 #[case(&["remove", "./my-env", "extra"])]
@@ -577,8 +541,8 @@ fn t059_extra_positional_argument_message_does_not_claim_flag(#[case] args: &[&s
 
 /// `oneshot`/`run`/`sandbox --help` must literally name `COMMAND` in their
 /// usage synopsis, matching contracts/cli-schema.md's documented
-/// `-- <COMMAND> [COMMAND ARGS...]` shape (T057) — previously all three
-/// showed only the generic `[-- <ARGS>...]`.
+/// `-- <COMMAND> [COMMAND ARGS...]` shape — previously all three showed
+/// only the generic `[-- <ARGS>...]`.
 #[rstest]
 #[case("oneshot")]
 #[case("run")]
@@ -633,11 +597,10 @@ fn t062_flag_only_no_subcommand_matches_bare_invocation_help_dump(#[case] args: 
     let _ = bare_stderr;
 }
 
-/// `RUST_LOG` must have zero effect on stderr when unset (closes T055
-/// without reintroducing the earlier "info by default" bug this fix
-/// almost caused: emitting `tracing::info!` events with a default,
-/// nonzero log level would otherwise pollute the fixed single-JSON-object
-/// stderr contract every other usage-error test above depends on).
+/// `RUST_LOG` must have zero effect on stderr when unset: emitting
+/// `tracing::info!` events with a default, nonzero log level would
+/// pollute the fixed single-JSON-object stderr contract every other
+/// usage-error test above depends on.
 #[test]
 fn t063_rust_log_unset_stays_silent() {
     let output = assert_cmd::Command::cargo_bin("allez")
@@ -654,10 +617,10 @@ fn t063_rust_log_unset_stays_silent() {
     );
 }
 
-/// `RUST_LOG=debug` (or any explicit level) must now produce at least one
-/// structured event on stderr — the T055 gap this remediation closes:
-/// `observability::init()` was previously only called after a successful
-/// parse, and no `tracing::*!` call site existed anywhere in `src/`.
+/// `RUST_LOG=debug` (or any explicit level) must produce at least one
+/// structured event on stderr — `observability::init()` used to only be
+/// called after a successful parse, with no `tracing::*!` call site
+/// anywhere in `src/`.
 #[test]
 fn t063a_rust_log_debug_produces_structured_output() {
     let output = assert_cmd::Command::cargo_bin("allez")
@@ -682,8 +645,8 @@ fn t063a_rust_log_debug_produces_structured_output() {
 }
 
 /// Same as t063a, but also confirms `RUST_LOG` still applies to
-/// parse-time usage errors (previously it didn't, since
-/// `observability::init()` used to run only in the `Ok(cli)` branch).
+/// parse-time usage errors (previously it didn't: `observability::init()`
+/// used to run only in the `Ok(cli)` branch).
 #[test]
 fn t063b_rust_log_debug_applies_to_parse_errors_too() {
     let output = assert_cmd::Command::cargo_bin("allez")

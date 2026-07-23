@@ -1,15 +1,13 @@
-//! `AllezError`: the fixed set of usage-error categories (FR-011, FR-017).
+//! `AllezError`: the fixed set of usage-error categories.
 
 use std::fmt;
 
-/// A usage error, mapped 1:1 to one of FR-017's fixed `category` strings.
-///
 /// Every variant maps to exactly one category via [`AllezError::category`],
 /// so there is no second, hand-maintained list of category strings that can
 /// drift out of sync with the type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AllezError {
-    /// A required argument was missing or empty (e.g. an empty path).
+    /// A required argument was missing or empty.
     MissingArgument,
     /// The subcommand name was not one of the six recognized names.
     UnknownSubcommand,
@@ -21,7 +19,7 @@ pub enum AllezError {
 }
 
 impl AllezError {
-    /// The fixed FR-017 category string for this variant.
+    /// The category string for this variant.
     pub fn category(&self) -> &'static str {
         match self {
             Self::MissingArgument => "missing_argument",

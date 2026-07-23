@@ -1,0 +1,10 @@
+{
+  "console": 7,
+  "default_activation_env": 7,
+  "env_prompt": 7,
+  "error_upload_url": 7,
+  "root_prefix": 7,
+  "solver": 7,
+  "subdir": 7,
+  "target_prefix_override": 7
+}

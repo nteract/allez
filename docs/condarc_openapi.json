@@ -1,0 +1,1217 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": ".condarc",
+    "description": "Schema for conda's `.condarc` configuration file. Models the full documented parameter catalog from docs/condarc_research.md: plain strings, boolish values (plain/nullable/ssl_verify/local_repodata_ttl), plain numerics (int/float), enums (channel_priority/path_conflict/safety_checks/sat_solver), lists of strings (+ list_fields' closed vocabulary), dict-of-strings and dict-of-lists maps, channel_settings, nullable strings, default_python, plus root-level cross-field rules (post_build_validation's client_ssl_cert/always_copy+always_softlink and all 20 MultipleKeysError alias-collision pairs) and root-shape handling (null root accepted; list/scalar roots rejected). Conda-build configuration keys are intentionally out of scope (docs/condarc_research.md §8 item 5). JSON Schema captures accept/reject shape only, not conda's exact coerced values; see per-component descriptions for documented unmodelable gaps (notably ssl_verify's filesystem-path existence check).",
+    "version": "0.1.0"
+  },
+  "paths": {},
+  "components": {
+    "schemas": {
+      "Condarc": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "description": "A .condarc document. `additionalProperties: false` is deliberate and will stay true as more keys are added below -- every real .condarc key must be explicitly modeled here, not merely tolerated. This is an intentionally *stricter* contract than real conda's own silent tolerance of unrecognized keys (docs/condarc_research.md §1.2) -- this schema is meant to be a maximally accurate, fully-specified reference, not a passthrough. The root `type` also permits `null`: a bare YAML `~`/empty file (JSON-serialized as `null`) is silently treated by conda as \"no settings\" and is valid (docs/condarc_research.md §1.1 / §11's root-shape cases), whereas a list or scalar root crashes conda and is rejected here.",
+        "additionalProperties": false,
+        "properties": {
+          "channel_alias": {
+            "description": "Base URL for constructing channel URLs from bare channel names (e.g. \"my-channel\" -> \"{channel_alias}/my-channel\"). Must have a URL scheme unless empty -- see CondaChannelAliasString.",
+            "default": "https://conda.anaconda.org",
+            "$ref": "#/components/schemas/CondaChannelAliasString"
+          },
+          "solver": {
+            "description": "The solver plugin to use when resolving package dependencies. Not a closed enum in conda's own Context (unlike channel_priority/safety_checks/etc.) -- solver *plugins* can register arbitrary names; \"classic\" and \"libmamba\" are merely the two built-in values, not an exhaustive list.",
+            "default": "libmamba",
+            "x-conda-aliases": [
+              "experimental_solver"
+            ],
+            "$ref": "#/components/schemas/CondaStringCoercible"
+          },
+          "experimental_solver": {
+            "description": "Deprecated alias of `solver` -- see that property. Modeled as its own schema property (rather than only via `solver`'s `x-conda-aliases`) so a document using this spelling directly still validates; see docs/condarc_research.md §1.3 for why alias collisions between this and `solver` within the same file (MultipleKeysError) are NOT enforced by this schema.",
+            "$ref": "#/components/schemas/CondaStringCoercible"
+          },
+          "console": {
+            "description": "Name of the console/reporter-backend plugin used to render conda's output. Like `solver`, intentionally unconstrained at the type level since plugins can register arbitrary backend names beyond the built-in \"classic\"/\"json\".",
+            "default": "classic",
+            "$ref": "#/components/schemas/CondaStringCoercible"
+          },
+          "default_activation_env": {
+            "description": "Name or path of the environment to activate by default when none is otherwise specified. Falls back to the root/base environment name (\"base\") at runtime if left empty.",
+            "default": "base",
+            "$ref": "#/components/schemas/CondaStringCoercible"
+          },
+          "env_prompt": {
+            "description": "Template string used to build the shell prompt prefix shown while an environment is active. Supports `{prefix}`/`{name}`/`{default_env}` placeholders; conda performs no structural validation of the template beyond it being coercible to a string.",
+            "default": "({default_env}) ",
+            "$ref": "#/components/schemas/CondaStringCoercible"
+          },
+          "error_upload_url": {
+            "description": "URL that unexpected-error reports are uploaded to. Deprecated on the read side in conda itself, but still a settable/loadable .condarc parameter.",
+            "$ref": "#/components/schemas/CondaStringCoercible"
+          },
+          "root_prefix": {
+            "description": "Filesystem path to conda's root/base installation prefix. Falls back to `sys.prefix` at runtime if left empty -- deliberately not given a `default` here since that runtime fallback isn't a fixed, documentable string value.",
+            "x-conda-aliases": [
+              "root_dir"
+            ],
+            "$ref": "#/components/schemas/CondaStringCoercible"
+          },
+          "root_dir": {
+            "description": "Alias of `root_prefix` -- see that property. Modeled as its own schema property so a document using this spelling directly still validates; see docs/condarc_research.md §1.3 for why alias collisions between this and `root_prefix` within the same file (MultipleKeysError) are NOT enforced by this schema.",
+            "$ref": "#/components/schemas/CondaStringCoercible"
+          },
+          "subdir": {
+            "description": "Platform subdirectory (e.g. \"linux-64\", \"osx-arm64\") conda resolves packages against. Falls back to the native platform's subdir at runtime if left empty.",
+            "$ref": "#/components/schemas/CondaStringCoercible"
+          },
+          "target_prefix_override": {
+            "description": "Overrides the prefix string conda reports/records as the install target, without changing the actual filesystem prefix used. Advanced/rarely-set option.",
+            "$ref": "#/components/schemas/CondaStringCoercible"
+          },
+          "override_channels_enabled": {
+            "default": true,
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "add_anaconda_token": {
+            "default": true,
+            "x-conda-aliases": [
+              "add_binstar_token"
+            ],
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "add_binstar_token": {
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "allow_non_channel_urls": {
+            "default": false,
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "no_lock": {
+            "default": false,
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "repodata_use_zst": {
+            "default": true,
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "repodata_use_shards": {
+            "default": true,
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "offline": {
+            "default": false,
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "auto_update_conda": {
+            "default": true,
+            "x-conda-aliases": [
+              "self_update"
+            ],
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "self_update": {
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "force_reinstall": {
+            "default": false,
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "prefix_data_interoperability": {
+            "default": false,
+            "x-conda-aliases": [
+              "pip_interop_enabled"
+            ],
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "pip_interop_enabled": {
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "allow_softlinks": {
+            "default": false,
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "always_copy": {
+            "default": false,
+            "x-conda-aliases": [
+              "copy"
+            ],
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "copy": {
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "always_softlink": {
+            "default": false,
+            "x-conda-aliases": [
+              "softlink"
+            ],
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "softlink": {
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "rollback_enabled": {
+            "default": true,
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "extra_safety_checks": {
+            "default": false,
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "shortcuts": {
+            "default": true,
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "non_admin_enabled": {
+            "default": true,
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "separate_format_cache": {
+            "default": false,
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "auto_activate_base": {
+            "default": true,
+            "x-conda-aliases": [
+              "auto_activate"
+            ],
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "auto_activate": {
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "changeps1": {
+            "default": true,
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "json": {
+            "default": false,
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "notify_outdated_conda": {
+            "default": true,
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "quiet": {
+            "default": false,
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "unsatisfiable_hints": {
+            "default": true,
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "envvars_force_uppercase": {
+            "default": true,
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "allow_cycles": {
+            "default": true,
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "allow_conda_downgrades": {
+            "default": false,
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "add_pip_as_python_dependency": {
+            "default": true,
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "debug": {
+            "default": false,
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "trace": {
+            "default": false,
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "dev": {
+            "default": false,
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "enable_private_envs": {
+            "default": false,
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "force_32bit": {
+            "default": false,
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "solver_ignore_timestamps": {
+            "default": false,
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "register_envs": {
+            "default": true,
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "protect_frozen_envs": {
+            "default": true,
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "no_plugins": {
+            "default": false,
+            "$ref": "#/components/schemas/CondaBool"
+          },
+          "always_yes": {
+            "default": null,
+            "x-conda-aliases": [
+              "yes"
+            ],
+            "$ref": "#/components/schemas/CondaNullableBool"
+          },
+          "yes": {
+            "$ref": "#/components/schemas/CondaNullableBool"
+          },
+          "report_errors": {
+            "default": null,
+            "$ref": "#/components/schemas/CondaNullableBool"
+          },
+          "show_channel_urls": {
+            "default": null,
+            "$ref": "#/components/schemas/CondaNullableBool"
+          },
+          "use_only_tar_bz2": {
+            "default": null,
+            "$ref": "#/components/schemas/CondaNullableBool"
+          },
+          "ssl_verify": {
+            "default": true,
+            "x-conda-aliases": [
+              "verify_ssl"
+            ],
+            "$ref": "#/components/schemas/CondaSslVerify"
+          },
+          "verify_ssl": {
+            "$ref": "#/components/schemas/CondaSslVerify"
+          },
+          "local_repodata_ttl": {
+            "default": 1,
+            "$ref": "#/components/schemas/CondaLocalRepodataTtl"
+          },
+          "channel_priority": {
+            "default": "flexible",
+            "$ref": "#/components/schemas/CondaChannelPriority"
+          },
+          "path_conflict": {
+            "default": "clobber",
+            "$ref": "#/components/schemas/CondaPathConflict"
+          },
+          "safety_checks": {
+            "default": "warn",
+            "$ref": "#/components/schemas/CondaSafetyChecks"
+          },
+          "sat_solver": {
+            "default": "pycosat",
+            "$ref": "#/components/schemas/CondaSatSolver"
+          },
+          "repodata_threads": {
+            "default": 0,
+            "$ref": "#/components/schemas/CondaIntCoercible"
+          },
+          "fetch_threads": {
+            "default": 0,
+            "$ref": "#/components/schemas/CondaIntCoercible"
+          },
+          "default_threads": {
+            "default": 0,
+            "$ref": "#/components/schemas/CondaIntCoercible"
+          },
+          "verify_threads": {
+            "default": 0,
+            "$ref": "#/components/schemas/CondaIntCoercible"
+          },
+          "execute_threads": {
+            "default": 0,
+            "$ref": "#/components/schemas/CondaIntCoercible"
+          },
+          "remote_max_retries": {
+            "default": 3,
+            "$ref": "#/components/schemas/CondaIntCoercible"
+          },
+          "remote_backoff_factor": {
+            "default": 1,
+            "$ref": "#/components/schemas/CondaIntCoercible"
+          },
+          "auto_stack": {
+            "default": 0,
+            "$ref": "#/components/schemas/CondaIntCoercible"
+          },
+          "verbosity": {
+            "default": 0,
+            "x-conda-aliases": [
+              "verbose"
+            ],
+            "$ref": "#/components/schemas/CondaIntCoercible"
+          },
+          "verbose": {
+            "$ref": "#/components/schemas/CondaIntCoercible"
+          },
+          "unsatisfiable_hints_check_depth": {
+            "default": 2,
+            "$ref": "#/components/schemas/CondaIntCoercible"
+          },
+          "number_channel_notices": {
+            "default": 5,
+            "$ref": "#/components/schemas/CondaIntCoercible"
+          },
+          "remote_connect_timeout_secs": {
+            "default": 9.15,
+            "$ref": "#/components/schemas/CondaFloatCoercible"
+          },
+          "remote_read_timeout_secs": {
+            "default": 60.0,
+            "$ref": "#/components/schemas/CondaFloatCoercible"
+          },
+          "channels": {
+            "default": [],
+            "x-conda-aliases": [
+              "channel"
+            ],
+            "$ref": "#/components/schemas/CondaStringSequence"
+          },
+          "channel": {
+            "$ref": "#/components/schemas/CondaStringSequence"
+          },
+          "default_channels": {
+            "$ref": "#/components/schemas/CondaStringSequence"
+          },
+          "allowlist_channels": {
+            "default": [],
+            "x-conda-aliases": [
+              "whitelist_channels"
+            ],
+            "$ref": "#/components/schemas/CondaStringSequence"
+          },
+          "whitelist_channels": {
+            "$ref": "#/components/schemas/CondaStringSequence"
+          },
+          "denylist_channels": {
+            "default": [],
+            "$ref": "#/components/schemas/CondaStringSequence"
+          },
+          "migrated_channel_aliases": {
+            "default": [],
+            "$ref": "#/components/schemas/CondaStringSequence"
+          },
+          "repodata_fns": {
+            "$ref": "#/components/schemas/CondaStringSequence"
+          },
+          "experimental": {
+            "default": [],
+            "$ref": "#/components/schemas/CondaStringSequence"
+          },
+          "envs_dirs": {
+            "default": [],
+            "x-conda-aliases": [
+              "envs_path"
+            ],
+            "$ref": "#/components/schemas/CondaStringSequence"
+          },
+          "envs_path": {
+            "$ref": "#/components/schemas/CondaStringSequence"
+          },
+          "pkgs_dirs": {
+            "default": [],
+            "$ref": "#/components/schemas/CondaStringSequence"
+          },
+          "preview": {
+            "default": [],
+            "$ref": "#/components/schemas/CondaStringSequence"
+          },
+          "aggressive_update_packages": {
+            "$ref": "#/components/schemas/CondaStringSequence"
+          },
+          "create_default_packages": {
+            "default": [],
+            "$ref": "#/components/schemas/CondaStringSequence"
+          },
+          "disallowed_packages": {
+            "default": [],
+            "x-conda-aliases": [
+              "disallow"
+            ],
+            "$ref": "#/components/schemas/CondaStringSequence"
+          },
+          "disallow": {
+            "$ref": "#/components/schemas/CondaStringSequence"
+          },
+          "pinned_packages": {
+            "default": [],
+            "$ref": "#/components/schemas/CondaStringSequence"
+          },
+          "track_features": {
+            "default": [],
+            "$ref": "#/components/schemas/CondaStringSequence"
+          },
+          "shortcuts_only": {
+            "default": [],
+            "$ref": "#/components/schemas/CondaStringSequence"
+          },
+          "export_platforms": {
+            "default": [],
+            "x-conda-aliases": [
+              "extra_platforms"
+            ],
+            "$ref": "#/components/schemas/CondaStringSequence"
+          },
+          "extra_platforms": {
+            "$ref": "#/components/schemas/CondaStringSequence"
+          },
+          "subdirs": {
+            "default": [],
+            "$ref": "#/components/schemas/CondaStringSequence"
+          },
+          "list_fields": {
+            "default": [
+              "name",
+              "version",
+              "build",
+              "channel_name"
+            ],
+            "$ref": "#/components/schemas/CondaListFields"
+          },
+          "custom_channels": {
+            "$ref": "#/components/schemas/CondaStringMap"
+          },
+          "migrated_custom_channels": {
+            "default": {},
+            "$ref": "#/components/schemas/CondaStringMap"
+          },
+          "override_virtual_packages": {
+            "default": {},
+            "x-conda-aliases": [
+              "virtual_packages"
+            ],
+            "$ref": "#/components/schemas/CondaNullableStringMap"
+          },
+          "virtual_packages": {
+            "$ref": "#/components/schemas/CondaNullableStringMap"
+          },
+          "proxy_servers": {
+            "default": {},
+            "$ref": "#/components/schemas/CondaNullableStringMap"
+          },
+          "custom_multichannels": {
+            "default": {},
+            "$ref": "#/components/schemas/CondaStringSequenceMap"
+          },
+          "channel_settings": {
+            "default": [],
+            "$ref": "#/components/schemas/CondaChannelSettings"
+          },
+          "client_ssl_cert": {
+            "default": null,
+            "x-conda-aliases": [
+              "client_cert"
+            ],
+            "$ref": "#/components/schemas/CondaNullableString"
+          },
+          "client_cert": {
+            "$ref": "#/components/schemas/CondaNullableString"
+          },
+          "client_ssl_cert_key": {
+            "default": null,
+            "x-conda-aliases": [
+              "client_cert_key"
+            ],
+            "$ref": "#/components/schemas/CondaNullableString"
+          },
+          "client_cert_key": {
+            "$ref": "#/components/schemas/CondaNullableString"
+          },
+          "signing_metadata_url_base": {
+            "default": null,
+            "$ref": "#/components/schemas/CondaNullableString"
+          },
+          "environment_specifier": {
+            "default": null,
+            "x-conda-aliases": [
+              "env_spec"
+            ],
+            "$ref": "#/components/schemas/CondaNullableString"
+          },
+          "env_spec": {
+            "$ref": "#/components/schemas/CondaNullableString"
+          },
+          "default_python": {
+            "default": null,
+            "$ref": "#/components/schemas/CondaDefaultPython"
+          }
+        },
+        "allOf": [
+          {
+            "$comment": "post_build_validation rule 1 (docs/condarc_research.md §1.4): client_ssl_cert (or its alias client_cert) is required when client_ssl_cert_key (or client_cert_key) is set to a truthy value. A truthy cert-key is a non-empty string or a truthy scalar; empty string / null are falsy and bypass the rule. Not(cert-key-truthy AND no-cert-truthy).",
+            "not": {
+              "type": "object",
+              "allOf": [
+                {
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "client_ssl_cert_key": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "client_ssl_cert_key"
+                      ]
+                    },
+                    {
+                      "properties": {
+                        "client_cert_key": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "client_cert_key"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "not": {
+                    "anyOf": [
+                      {
+                        "properties": {
+                          "client_ssl_cert": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "required": [
+                          "client_ssl_cert"
+                        ]
+                      },
+                      {
+                        "properties": {
+                          "client_cert": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "required": [
+                          "client_cert"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "$comment": "post_build_validation rule 2 (docs/condarc_research.md §1.4): always_copy (alias copy) and always_softlink (alias softlink) are mutually exclusive when both truthy. Not(both truthy). Truthy approximated as boolean true or a non-empty/non-false representation; the fixtures exercise literal true.",
+            "not": {
+              "type": "object",
+              "allOf": [
+                {
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "always_copy": {
+                          "enum": [
+                            true,
+                            "true",
+                            "True",
+                            "yes",
+                            "on",
+                            1
+                          ]
+                        }
+                      },
+                      "required": [
+                        "always_copy"
+                      ]
+                    },
+                    {
+                      "properties": {
+                        "copy": {
+                          "enum": [
+                            true,
+                            "true",
+                            "True",
+                            "yes",
+                            "on",
+                            1
+                          ]
+                        }
+                      },
+                      "required": [
+                        "copy"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "always_softlink": {
+                          "enum": [
+                            true,
+                            "true",
+                            "True",
+                            "yes",
+                            "on",
+                            1
+                          ]
+                        }
+                      },
+                      "required": [
+                        "always_softlink"
+                      ]
+                    },
+                    {
+                      "properties": {
+                        "softlink": {
+                          "enum": [
+                            true,
+                            "true",
+                            "True",
+                            "yes",
+                            "on",
+                            1
+                          ]
+                        }
+                      },
+                      "required": [
+                        "softlink"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "$comment": "MultipleKeysError (docs/condarc_research.md §1.3): 2+ aliased names of the same parameter must not appear together in one file. One not/required per aliased pair (all 20 pairs).",
+            "not": {
+              "type": "object",
+              "required": [
+                "solver",
+                "experimental_solver"
+              ]
+            }
+          },
+          {
+            "not": {
+              "type": "object",
+              "required": [
+                "root_prefix",
+                "root_dir"
+              ]
+            }
+          },
+          {
+            "not": {
+              "type": "object",
+              "required": [
+                "channels",
+                "channel"
+              ]
+            }
+          },
+          {
+            "not": {
+              "type": "object",
+              "required": [
+                "always_yes",
+                "yes"
+              ]
+            }
+          },
+          {
+            "not": {
+              "type": "object",
+              "required": [
+                "add_anaconda_token",
+                "add_binstar_token"
+              ]
+            }
+          },
+          {
+            "not": {
+              "type": "object",
+              "required": [
+                "auto_update_conda",
+                "self_update"
+              ]
+            }
+          },
+          {
+            "not": {
+              "type": "object",
+              "required": [
+                "prefix_data_interoperability",
+                "pip_interop_enabled"
+              ]
+            }
+          },
+          {
+            "not": {
+              "type": "object",
+              "required": [
+                "always_copy",
+                "copy"
+              ]
+            }
+          },
+          {
+            "not": {
+              "type": "object",
+              "required": [
+                "always_softlink",
+                "softlink"
+              ]
+            }
+          },
+          {
+            "not": {
+              "type": "object",
+              "required": [
+                "auto_activate_base",
+                "auto_activate"
+              ]
+            }
+          },
+          {
+            "not": {
+              "type": "object",
+              "required": [
+                "allowlist_channels",
+                "whitelist_channels"
+              ]
+            }
+          },
+          {
+            "not": {
+              "type": "object",
+              "required": [
+                "disallowed_packages",
+                "disallow"
+              ]
+            }
+          },
+          {
+            "not": {
+              "type": "object",
+              "required": [
+                "envs_dirs",
+                "envs_path"
+              ]
+            }
+          },
+          {
+            "not": {
+              "type": "object",
+              "required": [
+                "export_platforms",
+                "extra_platforms"
+              ]
+            }
+          },
+          {
+            "not": {
+              "type": "object",
+              "required": [
+                "override_virtual_packages",
+                "virtual_packages"
+              ]
+            }
+          },
+          {
+            "not": {
+              "type": "object",
+              "required": [
+                "ssl_verify",
+                "verify_ssl"
+              ]
+            }
+          },
+          {
+            "not": {
+              "type": "object",
+              "required": [
+                "verbosity",
+                "verbose"
+              ]
+            }
+          },
+          {
+            "not": {
+              "type": "object",
+              "required": [
+                "client_ssl_cert",
+                "client_cert"
+              ]
+            }
+          },
+          {
+            "not": {
+              "type": "object",
+              "required": [
+                "client_ssl_cert_key",
+                "client_cert_key"
+              ]
+            }
+          },
+          {
+            "not": {
+              "type": "object",
+              "required": [
+                "environment_specifier",
+                "env_spec"
+              ]
+            }
+          }
+        ]
+      },
+      "CondaStringCoercible": {
+        "description": "Shape shared by every `.condarc` key declared with a plain, single, non-tuple, non-nullable, non-enum `str` element_type and NO custom `validation=` callable (docs/condarc_research.md §4's catalog): console, default_activation_env, env_prompt, error_upload_url, root_prefix/root_dir, solver/experimental_solver, subdir, target_prefix_override. conda's type-coercion engine (`typify()`) calls a bare Python `str(value)` constructor on any non-string scalar, which never raises -- so a JSON boolean, number, or null is silently stringified (`str(true) == \"True\"`, `str(7) == \"7\"`, `str(None) == \"None\"`) rather than rejected, and an already-`str` JSON value is preserved byte-for-byte (including leading/trailing whitespace -- these keys' element_type is the single, exact `str` class, which skips typify()'s usual `.strip()`). Deliberately `[\"string\", \"number\", \"boolean\", \"null\"]`, NOT including \"integer\" separately -- JSON Schema's \"number\" type already matches every JSON numeric value (integer or fractional), so pairing \"integer\" alongside it would be redundant, not more precise (an \"integer\"-only key elsewhere in this schema that does NOT also accept arbitrary floats should list [\"integer\", ...] instead, without \"number\" -- the two keywords express genuinely different accepted sets and shouldn't be combined redundantly). An empty JSON array/object is cleanly rejected (fails the type check upstream of str()); a NON-empty array/object instead crashes real conda with an unhandled AttributeError rather than a clean validation error -- see docs/condarc_research.md §8 item 7 for the emptiness-not-shape crash boundary this schema cannot itself distinguish (both shapes are simply invalid here). This schema also cannot verify the *exact* coerced string value (e.g. that a JSON `true` really becomes the string \"True\", or that whitespace really is preserved unchanged) -- only that the raw JSON shape is one this key accepts; the conda-oracle's checked-in conformance/condarc/expected/*.json battery is what verifies the precise coercion result.",
+        "type": [
+          "string",
+          "number",
+          "boolean",
+          "null"
+        ]
+      },
+      "CondaChannelAliasString": {
+        "description": "Shape of `channel_alias`'s value: a string that, unless empty, must have a URL scheme per conda's `has_scheme()` check (`conda/common/url.py`: `re.match(r\"[a-z][a-z0-9]{0,11}://\", value)`). This is stricter than the RFC 3986 `scheme` grammar in three ways: (1) lowercase-only (\"HTTPS://x\" is rejected), (2) no `+`/`-`/`.` allowed in the scheme (unlike real-world schemes such as \"git+ssh://\"), and (3) length-bounded to 12 characters total before `://` (1 mandatory [a-z] + up to 11 more [a-z0-9]). An empty string bypasses the check entirely and is always valid. The pattern below is deliberately NOT anchored with a trailing `.*$` -- JSON Schema `pattern` is search/prefix-style, matching has_scheme()'s own `re.match` (which never looks past the `://` either). Unlike CondaStringCoercible's [\"string\", \"number\", \"boolean\", \"null\"], this component's `type` is plain `\"string\"` ONLY -- even though channel_alias's element_type is likewise the single, exact `str` class (so real conda's typify() does silently stringify a JSON bool/int/null via str(value) rather than rejecting it at the coercion stage). That widening is deliberately NOT mirrored here: str(true)/str(7)/str(null) yield \"True\"/\"7\"/\"None\", none of which can ever contain the literal \"://\" substring the scheme pattern requires, so every non-string JSON scalar is unconditionally, 100%-of-the-time rejected by channel_alias_validation once coerced -- there is no candidate value for which widening the `type` array would change the accept/reject verdict. Restricting `type` to plain \"string\" is therefore the more precise modeling choice for this specific key (it says outright \"only strings are ever accepted\" instead of relying on the pattern to always incidentally fail every non-string), even though the underlying coercion mechanism is nominally the same one CondaStringCoercible documents. See docs/condarc_research.md §3, §4.1, and §8 item 3 (and scripts/generate_channel_alias_condarc_fixtures.py's module docstring) for the full empirically-verified accept/reject boundary this pattern is derived from.",
+        "type": "string",
+        "pattern": "^$|^[a-z][a-z0-9]{0,11}://"
+      },
+      "CondaBool": {
+        "description": "Shape shared by every non-nullable `bool` .condarc key (docs/condarc_research.md §2.2 / §4's Category A boolish keys). conda's `boolify(nullable=False)` accepts any JSON bool, any JSON number (via `bool(value)` truthiness), and a wide vocabulary of boolish/numeric *strings*. A JSON `null` also loads (str-coerced then treated as the BOOLISH_FALSE token \"none\"). Arrays/objects are rejected (empty ones fail cleanly, non-empty ones crash real conda -- both simply invalid here). Among strings, only `boolify()`'s BOOLISH_TRUE/BOOLISH_FALSE tokens (true/yes/on/y, false/off/n/no/non/none/\"\") and Python-`complex()`-parseable numeric strings load; arbitrary words (\"banana\"), hex/oct/bin literals (\"0x1A\"), and the NULL_STRINGS-only tokens \"null\"/\"~\"/\"\\u0000\" (valid only for the nullable Category B keys, docs/condarc_research.md §8 item 13) are rejected. The string pattern approximates that boundary; JSON Schema cannot capture the exact coerced value, only accept/reject shape.",
+        "oneOf": [
+          {
+            "type": [
+              "boolean",
+              "number",
+              "null"
+            ]
+          },
+          {
+            "type": "string",
+            "pattern": "^\\s*([+-]?(\\d[\\d_]*(\\.[\\d_]*)?|\\.[\\d_]+)([eE][+-]?\\d+)?([+-]([+-]?(\\d[\\d_]*(\\.[\\d_]*)?|\\.[\\d_]+)([eE][+-]?\\d+)?))?[jJ]?)?\\s*$|^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[yY]|[nN]|[nN][oO][nN]|[nN][oO][nN][eE])\\s*$"
+          }
+        ]
+      },
+      "CondaChannelPriority": {
+        "description": "Shape of `channel_priority`: a `ChannelPriority` enum with a custom metaclass bool-compat shim (docs/condarc_research.md §2.3 / §5.1 / §8 item 2). Accepts either the lowercase value string (strict/flexible/disabled) or the Python member name (STRICT/FLEXIBLE/DISABLED), case-sensitively, whitespace-trimmable. Additionally, via ChannelPriorityMeta, a JSON `true`/`false` and the no-hint-regex boolish strings (true/yes/on -> FLEXIBLE, false/no/off -> DISABLED, any casing) are accepted. NOT accepted: numbers/numeric strings, short y/n tokens, none/non, or mixed-case value/name spellings like \"Strict\".",
+        "oneOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "string",
+            "pattern": "^\\s*(strict|flexible|disabled|STRICT|FLEXIBLE|DISABLED)\\s*$"
+          },
+          {
+            "type": "string",
+            "pattern": "^\\s*([tT][rR][uU][eE]|[yY][eE][sS]|[oO][nN]|[fF][aA][lL][sS][eE]|[nN][oO]|[oO][fF][fF])\\s*$"
+          }
+        ]
+      },
+      "CondaPathConflict": {
+        "description": "Shape of `path_conflict`: a `PathConflict` enum (docs/condarc_research.md §5.2). Member name == value for all three (clobber/warn/prevent, all lowercase), so only those three lowercase strings are accepted, whitespace-trimmable, case-sensitive. No bool shim.",
+        "type": "string",
+        "pattern": "^\\s*(clobber|warn|prevent)\\s*$"
+      },
+      "CondaSafetyChecks": {
+        "description": "Shape of `safety_checks`: a `SafetyChecks` enum (docs/condarc_research.md §5.3 / §8 item 2). Member name == value for all three (disabled/warn/enabled, all lowercase), so only those three lowercase strings are accepted, whitespace-trimmable, case-sensitive (no SHOUTY_CASE variants exist since the names are already lowercase).",
+        "type": "string",
+        "pattern": "^\\s*(disabled|warn|enabled)\\s*$"
+      },
+      "CondaSatSolver": {
+        "description": "Shape of `sat_solver`: a `SatSolverChoice` enum (docs/condarc_research.md §5.4 / §8 item 2). Accepts either the lowercase value string (pycosat/pycryptosat/pysat) or the SHOUTY_CASE Python member name (PYCOSAT/PYCRYPTOSAT/PYSAT), case-sensitive, whitespace-trimmable.",
+        "type": "string",
+        "pattern": "^\\s*(pycosat|pycryptosat|pysat|PYCOSAT|PYCRYPTOSAT|PYSAT)\\s*$"
+      },
+      "CondaStringSequence": {
+        "description": "Shape shared by every `SequenceParameter(str)` .condarc key (docs/condarc_research.md §2.4 / §4). The raw value must already be a real list -- a bare scalar is NOT auto-wrapped into a single-element list (conda's `isiterable()` check on the raw value rejects `channels: \"just-a-string\"`), and a non-empty mapping is rejected too. Each element is then str-coerced the same way CondaStringCoercible is, so an element may be a JSON string/number/boolean/null (all stringify), but NOT a nested array or object. Note: an *empty* JSON object `{}` is accepted (it iterates as zero elements, yielding an empty sequence), matching the empty-object fixtures -- hence the second `oneOf` branch. A JSON `null` value is also accepted (treated as unset). JSON Schema cannot verify the exact per-element coerced string, only accept/reject shape.",
+        "oneOf": [
+          {
+            "type": "array",
+            "items": {
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          {
+            "type": "object",
+            "maxProperties": 0
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "CondaListFields": {
+        "description": "Shape of `list_fields`: same `SequenceParameter(str)` container as CondaStringSequence, but with a custom `validation=` callable restricting every element to the closed `CONDA_LIST_FIELDS` key set (docs/condarc_research.md §5.9 / §3). Elements are matched exactly and case-sensitively with NO whitespace trimming (\"  name  \" and \"NAME\" are rejected), so this is a closed `enum` of the ~25 field names rather than the generic per-element string coercion. An empty JSON object `{}` is accepted as an empty sequence, like CondaStringSequence.",
+        "oneOf": [
+          {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "arch",
+                "build",
+                "build_number",
+                "channel",
+                "channel_name",
+                "constrains",
+                "depends",
+                "dist_str",
+                "features",
+                "fn",
+                "license",
+                "license_family",
+                "md5",
+                "name",
+                "noarch",
+                "package_type",
+                "requested_spec",
+                "requested_specs",
+                "sha256",
+                "size",
+                "subdir",
+                "timestamp",
+                "track_features",
+                "url",
+                "version"
+              ]
+            }
+          },
+          {
+            "type": "object",
+            "maxProperties": 0
+          }
+        ]
+      },
+      "CondaStringMap": {
+        "description": "Shape shared by non-nullable `MapParameter(str)` keys `custom_channels` and `migrated_custom_channels` (docs/condarc_research.md §2.1 / §4.1). The raw value must be a JSON object (bare scalars and lists are rejected). Each value is str-coerced like CondaStringCoercible -- string/number/boolean/null all accepted (a JSON null stringifies to \"None\"), but a nested array or object value is rejected. Keys are arbitrary strings (any casing, unicode, whitespace, empty, path/url-like), bounded only by YAML's 1024-char simple-key limit (so property-name content is capped at 1022 chars). A JSON `null` for the whole value is accepted (treated as unset), as is an empty object.",
+        "oneOf": [
+          {
+            "type": "object",
+            "propertyNames": {
+              "maxLength": 1022
+            },
+            "additionalProperties": {
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "CondaNullableStringMap": {
+        "description": "Shape shared by nullable `MapParameter((str, NoneType))` keys `override_virtual_packages`/`virtual_packages` and `proxy_servers` (docs/condarc_research.md §2.1 / §4.3 / §4.7). Identical JSON-shape acceptance to CondaStringMap: object of string/number/boolean/null values (nested arrays/objects rejected), arbitrary keys capped at 1022 chars, whole-value JSON `null` accepted as unset. The distinction from CondaStringMap is coercion semantics only (per the `{str, NoneType}` dispatch row, a `\"none\"`-string value round-trips to real None here rather than the literal string \"none\"), which JSON Schema cannot observe -- both accept the same JSON shapes.",
+        "oneOf": [
+          {
+            "type": "object",
+            "propertyNames": {
+              "maxLength": 1022
+            },
+            "additionalProperties": {
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "CondaStringSequenceMap": {
+        "description": "Shape of `custom_multichannels`: `MapParameter(SequenceParameter(str))` (docs/condarc_research.md §4.1). A JSON object whose each value is itself a list of str-coercible elements (string/number/boolean/null; nested arrays/objects as elements are rejected). A value may also be an empty object `{}` (treated as an empty list) or JSON `null` (empty tuple), but a bare scalar/string value or a non-empty object value is rejected. Keys are arbitrary strings capped at 1022 chars (YAML simple-key limit). The whole value may be JSON `null` (unset) or an empty object.",
+        "oneOf": [
+          {
+            "type": "object",
+            "propertyNames": {
+              "maxLength": 1022
+            },
+            "additionalProperties": {
+              "oneOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean",
+                      "null"
+                    ]
+                  }
+                },
+                {
+                  "type": "object",
+                  "maxProperties": 0
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "CondaDefaultPython": {
+        "description": "Shape of `default_python`: `(str, NoneType)` with a custom `default_python_validation` callable (docs/condarc_research.md §3 / §8 item 4). Empty string or falsy means \"no python pinning\" (valid). Otherwise the value must have `value[1] == '.'` (a single leading `2` or `3`, then a literal dot) AND `2.0 <= float(value) < 4.0`. Since any `2.<digits>` or `3.<digits>` string is automatically < 4.0 and >= 2.0, the accept boundary is exactly the regex `^[23]\\.[0-9]+$` (approximating the float-range check per §8 item 4), whitespace-trimmable. Also accepts JSON `null` (no pinning), empty string, and a JSON number in [2.0, 4.0). Rejected: `4.0`/`1.9`/`9.5` (out of range), `3`/`3.` (wrong shape), `03.9`/`33.9`/`-3.5` (dot not at index 1), `3.10.1`, `3,9`, `3e0`, `3.a`, bools, and out-of-range numbers.",
+        "oneOf": [
+          { "type": "null" },
+          { "type": "string", "pattern": "^\\s*$|^\\s*[23]\\.[0-9]+\\s*$" },
+          { "type": "number", "minimum": 2.0, "exclusiveMaximum": 4.0 }
+        ]
+      },
+      "CondaNullableString": {
+        "description": "Shape shared by nullable `(str, NoneType)` string keys with NO custom validation: `client_ssl_cert`/`client_cert`, `client_ssl_cert_key`/`client_cert_key`, `signing_metadata_url_base`, `environment_specifier`/`env_spec` (docs/condarc_research.md §2.1's `{str, NoneType}` dispatch row / §4.3 / §4.7 / §4.11). Coerced via `str(value)` except the literal string \"none\" (case-insensitive) becomes real None. At the JSON-shape level this accepts exactly the same set as CondaStringCoercible -- any JSON scalar (string/number/boolean) stringifies and never raises, and a JSON `null` is likewise accepted -- so the accepted shapes are identical; the only difference is the `\"none\"`-to-None coercion semantics, which JSON Schema cannot observe. Cross-field rules involving client_ssl_cert/client_ssl_cert_key are handled at the document root, not here.",
+        "type": [
+          "string",
+          "number",
+          "boolean",
+          "null"
+        ]
+      },
+      "CondaChannelSettings": {
+        "description": "Shape of `channel_settings`: `SequenceParameter(MapParameter(str))` -- a list of string-to-str-coercible maps (docs/condarc_research.md §4.1 / §6). Each list element is a JSON object whose values are string/number/boolean/null (nested arrays/objects as values are rejected), OR a JSON `null` (treated as an empty map). Bare scalar/string/list array elements are rejected. settings.rst documents each entry as needing a `channel` key, but this is NOT enforced at parse time by context.py/common/configuration.py (docs/condarc_research.md §6) -- confirmed empirically by the `channel_settings_accept_array_size_1_missing_channel_key` fixture living under valid/ -- so `channel` is deliberately NOT marked required here. The whole value may also be JSON `null` (unset) or an empty object `{}` (treated as an empty array).",
+        "oneOf": [
+          {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean",
+                      "null"
+                    ]
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          {
+            "type": "object",
+            "maxProperties": 0
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "CondaIntCoercible": {
+        "description": "Shape shared by every plain `int` .condarc key (docs/condarc_research.md §4 / §8 item 14): repodata_threads, fetch_threads, default_threads, verify_threads, execute_threads, remote_max_retries, remote_backoff_factor, auto_stack, verbosity/verbose, unsatisfiable_hints_check_depth, number_channel_notices. conda coerces via a bare `int(value)` call: a JSON bool (bool is an int subclass) and any JSON number (float is truncated toward zero, not floored) load, as do integer-looking strings -- optional sign, digit groups separated by single underscores (PEP 515), leading zeros, arbitrary-precision bignums -- whitespace-trimmable. No magnitude bound (negatives and values beyond i64/u64 range load fine). Rejected: decimals/scientific-notation/nan/inf strings (those are float-only), empty/whitespace-only strings, hex/oct/bin literals, malformed underscores (`1__000`/`_1000`/`1000_`), arbitrary words, arrays, objects, and JSON null. JSON Schema `type: integer` has no magnitude ceiling, so bignums are fine.",
+        "oneOf": [
+          {
+            "type": [
+              "boolean",
+              "number"
+            ]
+          },
+          {
+            "type": "string",
+            "pattern": "^\\s*[+-]?\\d(_?\\d)*\\s*$"
+          }
+        ]
+      },
+      "CondaFloatCoercible": {
+        "description": "Shape shared by the plain `float` .condarc keys `remote_connect_timeout_secs` and `remote_read_timeout_secs` (docs/condarc_research.md §4.3 / §8 items 14-15). conda coerces via a bare `float(value)` call: everything CondaIntCoercible accepts, PLUS float-shaped strings -- decimals (incl. leading/trailing dot), scientific notation, PEP 515 underscores in the mantissa, and the special tokens nan/inf/infinity (any casing, optional sign). A float that overflows to +inf still loads. Rejected: arbitrary words, complex/hex/oct/bin literals, empty/whitespace-only strings, arrays, objects, and JSON null.",
+        "oneOf": [
+          {
+            "type": [
+              "boolean",
+              "number"
+            ]
+          },
+          {
+            "type": "string",
+            "pattern": "^\\s*([+-]?((\\d(_?\\d)*(\\.(\\d(_?\\d)*)?)?|\\.\\d(_?\\d)*)([eE][+-]?\\d(_?\\d)*)?)|[+-]?([iI][nN][fF]|[iI][nN][fF][iI][nN][iI][tT][yY]|[nN][aA][nN]))\\s*$"
+          }
+        ]
+      },
+      "CondaNullableBool": {
+        "description": "Shape shared by nullable `(bool, NoneType)` boolish keys -- `always_yes`/`yes`, `report_errors`, `show_channel_urls`, `use_only_tar_bz2` (docs/condarc_research.md §2.2 / §4.7 Category B). Same accepted JSON shapes as CondaBool, PLUS the three NULL_STRINGS-only string tokens \"null\", \"~\", and \"\\u0000\" (the null byte), which round-trip to Python None via `boolify(nullable=True)` for these keys but are rejected by non-nullable Category A keys (docs/condarc_research.md §8 item 13). A JSON `null` is likewise a first-class accepted value.",
+        "oneOf": [
+          {
+            "type": [
+              "boolean",
+              "number",
+              "null"
+            ]
+          },
+          {
+            "type": "string",
+            "pattern": "^\\s*([+-]?(\\d[\\d_]*(\\.[\\d_]*)?|\\.[\\d_]+)([eE][+-]?\\d+)?([+-]([+-]?(\\d[\\d_]*(\\.[\\d_]*)?|\\.[\\d_]+)([eE][+-]?\\d+)?))?[jJ]?)?\\s*$|^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[yY]|[nN]|[nN][oO][nN]|[nN][oO][nN][eE]|~|[nN][uU][lL][lL]|\\u0000)\\s*$"
+          }
+        ]
+      },
+      "CondaSslVerify": {
+        "description": "Shape of `ssl_verify`/`verify_ssl`: `(str, bool)` with a custom `validation=` callable (docs/condarc_research.md §3). Accepts JSON bool/number/null and the same boolish/numeric string vocabulary as CondaBool (these boolify normally). String values that are NOT boolish must be either the exact literal \"truststore\" (whitespace-trimmable) OR a path that exists on the local filesystem -- the latter is environment-dependent and NOT portably encodable in JSON Schema (§3). This component therefore models the portable subset plus the always-present current-directory path \".\"; arbitrary certificate paths cannot be validated here and are a documented unmodelable gap (an existing path other than \".\" would be incorrectly rejected, and a nonexistent path is correctly rejected).",
+        "oneOf": [
+          {
+            "type": [
+              "boolean",
+              "number",
+              "null"
+            ]
+          },
+          {
+            "type": "string",
+            "pattern": "^\\s*([+-]?(\\d[\\d_]*(\\.[\\d_]*)?|\\.[\\d_]+)([eE][+-]?\\d+)?([+-]([+-]?(\\d[\\d_]*(\\.[\\d_]*)?|\\.[\\d_]+)([eE][+-]?\\d+)?))?[jJ]?)?\\s*$|^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[yY]|[nN]|[nN][oO][nN]|[nN][oO][nN][eE])\\s*$"
+          },
+          {
+            "type": "string",
+            "pattern": "^\\s*truststore\\s*$"
+          },
+          {
+            "type": "string",
+            "pattern": "^\\s*\\.\\s*$"
+          }
+        ]
+      },
+      "CondaLocalRepodataTtl": {
+        "description": "Shape of `local_repodata_ttl`: `(bool, int)` (docs/condarc_research.md §4.3 / §8 item 6). Coerced via `typify_str_no_hint(str(value))`, a strictly narrower boolish-string vocabulary than `boolify()`'s: only true/yes/on and false/no/off (case-insensitive) among words, plus integer-looking numeric values. JSON bool and JSON integers/numbers load; the empty string, single-letter `y`/`n`, `non`/`none`, `~`/`null`, and hex/oct/bin literals do NOT. Arrays/objects rejected.",
+        "oneOf": [
+          {
+            "type": [
+              "boolean",
+              "integer"
+            ]
+          },
+          {
+            "type": "string",
+            "pattern": "^\\s*[+-]?\\d+\\s*$|^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF])\\s*$"
+          }
+        ]
+      }
+    }
+  }
+}

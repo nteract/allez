@@ -547,9 +547,29 @@ exactly the kind of full-fidelity detail worth keeping, not just "it passed."
    `"strict"`/`"flexible"`/`"disabled"`/`true`/`false` — an `enum` cannot
    express "case-sensitive value-or-name lookup" any other way.
 3. **`channel_alias`'s "must have a scheme" rule needed a regex, not just a
-   textual description.** Modeled as `"pattern": "^$|^[A-Za-z][A-Za-z0-9+.-]*://.*$"`
-   (empty string, or an RFC-3986-shaped `scheme://...` prefix), directly
-   encoding `channel_alias_validation`'s `has_scheme()` check.
+   textual description -- and an earlier draft of this very note guessed
+   the wrong regex.** An earlier pass here modeled it as `"pattern":
+   "^$|^[A-Za-z][A-Za-z0-9+.-]*://.*$"` (empty string, or an
+   RFC-3986-shaped `scheme://...` prefix) -- but `has_scheme()`
+   (`conda/common/url.py`) is actually `re.match(r"[a-z][a-z0-9]{0,11}://",
+   value)`, which is **stricter** than RFC 3986 in three ways the
+   RFC-shaped guess above misses entirely: (a) **lowercase-only** (no
+   `[A-Za-z]` case-insensitivity -- `"HTTPS://x"` and even
+   `"Https://x"` are rejected), (b) **no `+`/`-`/`.` allowed** in the
+   scheme (despite being RFC-3986-legal and used in real schemes like
+   `git+ssh://` -- conda's regex is `[a-z0-9]` only), and (c)
+   **length-bounded to 12 characters total** before `://` (1 mandatory
+   `[a-z]` + up to 11 more `[a-z0-9]`, i.e. `{0,11}` -- a 13-character
+   scheme name fails even though it's otherwise well-formed). The
+   correct schema pattern is `"^$|^[a-z][a-z0-9]{0,11}://"` (empty
+   string, or the exact `has_scheme()` prefix -- no trailing `.*$`
+   needed, since `re.match`/JSON Schema `pattern` are both
+   prefix/search-style, not `fullmatch`-anchored, and `has_scheme()`
+   itself never looks past the `://`). Empirically verified via
+   `scripts/generate_channel_alias_condarc_fixtures.py`'s exhaustive
+   accept/reject battery (`conformance/condarc/{valid,invalid}/
+   channel_alias_*.json`) -- see that script's module docstring for the
+   full boundary-by-boundary derivation this correction is based on.
 4. **`default_python`'s validation needed a regex approximation of a
    float-range check.** conda's real check (`value[1] == '.'` then
    `2.0 <= float(value) < 4.0`) isn't directly expressible as a JSON Schema

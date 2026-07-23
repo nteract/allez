@@ -54,8 +54,14 @@
 //!   - **crate**: the not-yet-implemented `condarc` crate (GEN-36).
 //!     Currently always [`CheckOutcome::Skipped`] -- see
 //!     [`check_crate`].
-//!   - **openapi**: validates against `docs/condarc_openapi.json` (also
-//!     not yet implemented) using the `jsonschema` crate.
+//!   - **openapi**: validates against the `Condarc` schema nested under
+//!     `components.schemas.Condarc` in `docs/condarc_openapi.json`
+//!     (an OpenAPI 3.1 document; only that one subschema is used as the
+//!     actual JSON Schema fed to the `jsonschema` crate -- see
+//!     `check_openapi`). Currently a deliberate stub covering only
+//!     `default_threads`; still under active, iterative construction
+//!     (GEN-36-adjacent) -- see that file's own `info.description` for
+//!     scope.
 //!
 //! Each checker is automatically skipped (not failed) when its backend
 //! is unavailable (no `conda`-capable python found / crate not
@@ -102,7 +108,8 @@ enum Checker {
     Conda,
     /// The not-yet-implemented `condarc` Rust crate (GEN-36).
     Crate,
-    /// `docs/condarc_openapi.json`, validated via the `jsonschema` crate.
+    /// The `Condarc` subschema of `docs/condarc_openapi.json`,
+    /// validated via the `jsonschema` crate.
     OpenApi,
 }
 
@@ -314,8 +321,8 @@ fn check_conda(value: &Value) -> CheckOutcome {
 //
 // In addition to accept/reject, the conda oracle is also the only
 // checker today that can report *what* it parsed a valid fixture into
-// (GEN-36's crate doesn't exist yet, and `docs/condarc_openapi.json` is
-// schema-only -- neither produces a value, just accept/reject). This
+// (GEN-36's crate doesn't exist yet, and `docs/condarc_openapi.json`
+// is schema-only -- neither produces a value, just accept/reject). This
 // reuses `scripts/generate_zzz_condarc_expected_fixtures.py` --
 // specifically its `--fixture PATH` mode, which computes and prints one
 // fixture's expected representation to stdout without touching
@@ -447,6 +454,46 @@ fn openapi_schema_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("docs/condarc_openapi.json")
 }
 
+/// `docs/condarc_openapi.json` is a (mostly vacuous -- no real
+/// `paths`) OpenAPI 3.1 document, not a bare JSON Schema document, so
+/// the actual `.condarc` schema the `jsonschema` crate needs to
+/// validate against lives nested at `components.schemas.Condarc`
+/// inside it, per the standard OpenAPI convention for where reusable
+/// schemas are defined. This pulls that one subschema back out --
+/// while re-attaching the document's `components` object as a
+/// *sibling* key on the returned value, not just discarding it.
+///
+/// That re-attachment matters as soon as `Condarc`'s own properties
+/// start using `"$ref": "#/components/schemas/SomeReusableType"` (the
+/// proper-type-definition style this schema is meant to use instead
+/// of ad hoc inline shapes -- see docs/condarc_research.md and the
+/// per-bucket schema work it backs). `jsonschema::validator_for`
+/// resolves a `#/...` JSON Pointer `$ref` against the root of
+/// whatever document it was actually given -- so handing it just the
+/// bare `Condarc` node in isolation (this function's original,
+/// simpler behavior) would make every such `$ref` dangle, since
+/// `#/components/schemas/...` doesn't exist starting from `Condarc`
+/// itself. Splicing `components` back in as a sibling of `Condarc`'s
+/// own `type`/`properties`/etc. keys makes the returned value a
+/// valid, self-contained resolution root for those refs, without
+/// requiring any external resolver/retrieval configuration on the
+/// `jsonschema` side -- unknown sibling keywords (`components` isn't
+/// itself a JSON Schema keyword) are simply ignored by the validator.
+fn extract_condarc_schema(document: &Value) -> Result<Value, String> {
+    let condarc = document.pointer("/components/schemas/Condarc").ok_or_else(|| {
+        "missing components.schemas.Condarc (expected an OpenAPI 3.1 document with the \
+         .condarc schema nested there)"
+            .to_string()
+    })?;
+    let Value::Object(mut merged) = condarc.clone() else {
+        return Err("components.schemas.Condarc is not a JSON object".to_string());
+    };
+    if let Some(components) = document.get("components") {
+        merged.insert("components".to_string(), components.clone());
+    }
+    Ok(Value::Object(merged))
+}
+
 fn check_openapi(value: &Value) -> CheckOutcome {
     let schema_path = openapi_schema_path();
     let schema_text = match std::fs::read_to_string(&schema_path) {
@@ -455,7 +502,7 @@ fn check_openapi(value: &Value) -> CheckOutcome {
             return CheckOutcome::Skipped(format!("{} does not exist yet", schema_path.display()));
         }
     };
-    let schema: Value = match serde_json::from_str(&schema_text) {
+    let document: Value = match serde_json::from_str(&schema_text) {
         Ok(v) => v,
         Err(err) => {
             return CheckOutcome::Skipped(format!(
@@ -464,11 +511,17 @@ fn check_openapi(value: &Value) -> CheckOutcome {
             ));
         }
     };
+    let schema = match extract_condarc_schema(&document) {
+        Ok(v) => v,
+        Err(err) => {
+            return CheckOutcome::Skipped(format!("{}: {err}", schema_path.display()));
+        }
+    };
     let validator = match jsonschema::validator_for(&schema) {
         Ok(v) => v,
         Err(err) => {
             return CheckOutcome::Skipped(format!(
-                "{} is not a valid JSON Schema: {err}",
+                "{} components.schemas.Condarc is not a valid JSON Schema: {err}",
                 schema_path.display()
             ));
         }

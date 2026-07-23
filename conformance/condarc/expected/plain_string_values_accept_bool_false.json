@@ -1,0 +1,10 @@
+{
+  "console": "False",
+  "default_activation_env": "False",
+  "env_prompt": "False",
+  "error_upload_url": "False",
+  "root_prefix": "False",
+  "solver": "False",
+  "subdir": "False",
+  "target_prefix_override": "False"
+}

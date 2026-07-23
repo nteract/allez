@@ -1,0 +1,10 @@
+{
+  "console": "  hello  ",
+  "default_activation_env": "  hello  ",
+  "env_prompt": "  hello  ",
+  "error_upload_url": "  hello  ",
+  "root_prefix": "  hello  ",
+  "solver": "  hello  ",
+  "subdir": "  hello  ",
+  "target_prefix_override": "  hello  "
+}

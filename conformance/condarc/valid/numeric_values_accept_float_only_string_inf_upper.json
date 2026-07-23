@@ -1,0 +1,4 @@
+{
+  "remote_connect_timeout_secs": "INF",
+  "remote_read_timeout_secs": "INF"
+}

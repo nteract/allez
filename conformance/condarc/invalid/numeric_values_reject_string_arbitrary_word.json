@@ -1,0 +1,15 @@
+{
+  "repodata_threads": "banana",
+  "fetch_threads": "banana",
+  "default_threads": "banana",
+  "remote_max_retries": "banana",
+  "remote_backoff_factor": "banana",
+  "verify_threads": "banana",
+  "execute_threads": "banana",
+  "auto_stack": "banana",
+  "verbosity": "banana",
+  "unsatisfiable_hints_check_depth": "banana",
+  "number_channel_notices": "banana",
+  "remote_connect_timeout_secs": "banana",
+  "remote_read_timeout_secs": "banana"
+}

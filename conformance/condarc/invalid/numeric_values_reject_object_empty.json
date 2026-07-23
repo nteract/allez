@@ -1,0 +1,15 @@
+{
+  "repodata_threads": {},
+  "fetch_threads": {},
+  "default_threads": {},
+  "remote_max_retries": {},
+  "remote_backoff_factor": {},
+  "verify_threads": {},
+  "execute_threads": {},
+  "auto_stack": {},
+  "verbosity": {},
+  "unsatisfiable_hints_check_depth": {},
+  "number_channel_notices": {},
+  "remote_connect_timeout_secs": {},
+  "remote_read_timeout_secs": {}
+}

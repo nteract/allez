@@ -1,0 +1,13 @@
+{
+  "repodata_threads": "nan",
+  "fetch_threads": "nan",
+  "default_threads": "nan",
+  "remote_max_retries": "nan",
+  "remote_backoff_factor": "nan",
+  "verify_threads": "nan",
+  "execute_threads": "nan",
+  "auto_stack": "nan",
+  "verbosity": "nan",
+  "unsatisfiable_hints_check_depth": "nan",
+  "number_channel_notices": "nan"
+}

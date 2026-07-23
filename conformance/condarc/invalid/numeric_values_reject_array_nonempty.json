@@ -1,0 +1,67 @@
+{
+  "repodata_threads": [
+    1,
+    2,
+    3
+  ],
+  "fetch_threads": [
+    1,
+    2,
+    3
+  ],
+  "default_threads": [
+    1,
+    2,
+    3
+  ],
+  "remote_max_retries": [
+    1,
+    2,
+    3
+  ],
+  "remote_backoff_factor": [
+    1,
+    2,
+    3
+  ],
+  "verify_threads": [
+    1,
+    2,
+    3
+  ],
+  "execute_threads": [
+    1,
+    2,
+    3
+  ],
+  "auto_stack": [
+    1,
+    2,
+    3
+  ],
+  "verbosity": [
+    1,
+    2,
+    3
+  ],
+  "unsatisfiable_hints_check_depth": [
+    1,
+    2,
+    3
+  ],
+  "number_channel_notices": [
+    1,
+    2,
+    3
+  ],
+  "remote_connect_timeout_secs": [
+    1,
+    2,
+    3
+  ],
+  "remote_read_timeout_secs": [
+    1,
+    2,
+    3
+  ]
+}

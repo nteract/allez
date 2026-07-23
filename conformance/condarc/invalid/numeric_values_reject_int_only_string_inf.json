@@ -1,0 +1,13 @@
+{
+  "repodata_threads": "inf",
+  "fetch_threads": "inf",
+  "default_threads": "inf",
+  "remote_max_retries": "inf",
+  "remote_backoff_factor": "inf",
+  "verify_threads": "inf",
+  "execute_threads": "inf",
+  "auto_stack": "inf",
+  "verbosity": "inf",
+  "unsatisfiable_hints_check_depth": "inf",
+  "number_channel_notices": "inf"
+}

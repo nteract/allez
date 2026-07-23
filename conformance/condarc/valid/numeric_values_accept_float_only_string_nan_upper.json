@@ -1,0 +1,4 @@
+{
+  "remote_connect_timeout_secs": "NAN",
+  "remote_read_timeout_secs": "NAN"
+}

@@ -1,0 +1,14 @@
+{
+  "custom_channels": {
+    "__cuda": "val"
+  },
+  "migrated_custom_channels": {
+    "__cuda": "val"
+  },
+  "override_virtual_packages": {
+    "__cuda": "val"
+  },
+  "proxy_servers": {
+    "__cuda": "val"
+  }
+}

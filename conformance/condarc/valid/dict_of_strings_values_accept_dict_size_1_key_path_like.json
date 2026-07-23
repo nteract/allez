@@ -1,0 +1,14 @@
+{
+  "custom_channels": {
+    "pkgs/pro": "val"
+  },
+  "migrated_custom_channels": {
+    "pkgs/pro": "val"
+  },
+  "override_virtual_packages": {
+    "pkgs/pro": "val"
+  },
+  "proxy_servers": {
+    "pkgs/pro": "val"
+  }
+}

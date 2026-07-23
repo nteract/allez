@@ -189,15 +189,28 @@ CANDIDATES: list[tuple[str, object]] = [
     # (previously this crashed via a *different* bug, local_repodata_ttl's
     # hex()-misuse, before that key was pulled out -- see §8 items 9/11).
     ("string_hex_literal", "0x1A"),
-    # "null" is a NULL_STRINGS token but NOT a BOOLISH_FALSE token, so it
-    # only becomes None for *nullable* boolify() calls; non-nullable
-    # ssl_verify's boolify() call can't convert it to a bool, so it stays
-    # the raw string "null" and then fails ssl_verify_validation's
-    # filesystem-existence check (§8 item 9) -- and for the Category A
-    # plain-bool keys, boolify(nullable=False) itself simply raises
-    # TypeCoercionError for it (no filesystem check involved at all).
-    ("string_null_token", "null"),
 ]
+
+# NOTE: an earlier revision of this shared battery also included
+# `("string_null_token", "null")` here, applied to the *full* `KEYS` list.
+# That was a genuine bug, not just redundant: "null" is a `NULL_STRINGS`
+# token but NOT a `BOOLISH_FALSE` token, so it boolifies to a real Python
+# `None` -- and is therefore *individually valid* -- for the four
+# nullable `(bool, NoneType)` keys in `NULLABLE_BOOL_KEYS` (confirmed by
+# `nullable_values_accept_string_null_token.json`). Applying it to the
+# shared, non-`_combined` `KEYS` list made `invalid_condarc_is_rejected`'s
+# per-key explosion (tests/condarc_conformance.rs) assert that
+# `{"always_yes": "null"}` alone should be rejected, when real conda
+# actually accepts it -- a latent failure that stayed hidden only because
+# of an unrelated stale-test-binary caching issue (rstest's `#[files(...)]`
+# glob runs at compile time; adding/removing fixtures alone didn't used to
+# trigger a rebuild -- now fixed via `make`'s `touch tests/condarc_
+# conformance.rs`). "null"'s two *genuinely* key-scoped rejection
+# mechanisms are already covered elsewhere and don't need re-adding here:
+# `NULLABLE_ONLY_REJECT_CANDIDATES` below (Category A only) and
+# `generate_ssl_verify_passthrough_reject_fixtures.py`'s own
+# `ssl_verify_passthrough_reject_string_null_token.json` (`ssl_verify`
+# only).
 
 # See module docstring: the mirror image of generate_boolish_condarc_
 # fixtures.py's NULLABLE_ONLY_CANDIDATES, applied only to the Category A

@@ -1,0 +1,20 @@
+{
+  "channels": null,
+  "default_channels": null,
+  "allowlist_channels": null,
+  "denylist_channels": null,
+  "migrated_channel_aliases": null,
+  "repodata_fns": null,
+  "experimental": null,
+  "envs_dirs": null,
+  "pkgs_dirs": null,
+  "preview": null,
+  "aggressive_update_packages": null,
+  "create_default_packages": null,
+  "disallowed_packages": null,
+  "pinned_packages": null,
+  "track_features": null,
+  "shortcuts_only": null,
+  "export_platforms": null,
+  "subdirs": null
+}

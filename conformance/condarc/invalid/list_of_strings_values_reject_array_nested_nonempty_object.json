@@ -1,0 +1,92 @@
+{
+  "channels": [
+    {
+      "a": 1
+    }
+  ],
+  "default_channels": [
+    {
+      "a": 1
+    }
+  ],
+  "allowlist_channels": [
+    {
+      "a": 1
+    }
+  ],
+  "denylist_channels": [
+    {
+      "a": 1
+    }
+  ],
+  "migrated_channel_aliases": [
+    {
+      "a": 1
+    }
+  ],
+  "repodata_fns": [
+    {
+      "a": 1
+    }
+  ],
+  "experimental": [
+    {
+      "a": 1
+    }
+  ],
+  "envs_dirs": [
+    {
+      "a": 1
+    }
+  ],
+  "pkgs_dirs": [
+    {
+      "a": 1
+    }
+  ],
+  "preview": [
+    {
+      "a": 1
+    }
+  ],
+  "aggressive_update_packages": [
+    {
+      "a": 1
+    }
+  ],
+  "create_default_packages": [
+    {
+      "a": 1
+    }
+  ],
+  "disallowed_packages": [
+    {
+      "a": 1
+    }
+  ],
+  "pinned_packages": [
+    {
+      "a": 1
+    }
+  ],
+  "track_features": [
+    {
+      "a": 1
+    }
+  ],
+  "shortcuts_only": [
+    {
+      "a": 1
+    }
+  ],
+  "export_platforms": [
+    {
+      "a": 1
+    }
+  ],
+  "subdirs": [
+    {
+      "a": 1
+    }
+  ]
+}

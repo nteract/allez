@@ -1,6 +1,9 @@
-.PHONY: help test conformance conformance-conda conformance-crate conformance-openapi
+.PHONY: help test conformance conformance-conda conformance-crate conformance-openapi regenerate-condarc-fixtures
 
 CONFORMANCE_TEST := cargo test --test condarc_conformance
+CONFORMANCE_TEST_FILE := tests/condarc_conformance.rs
+CONFORMANCE_VALID_DIR := conformance/condarc/valid
+CONFORMANCE_INVALID_DIR := conformance/condarc/invalid
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | sort | awk -F ':.*## ' '{printf "%-24s %s\n", $$1, $$2}'
@@ -8,14 +11,33 @@ help: ## Show this help
 test: ## Run the full cargo test suite
 	cargo test --all
 
+# rstest's #[files(...)] attribute globs conformance/condarc/{valid,invalid}
+# at compile time (inside the proc-macro expansion), so cargo has no way to
+# know a rebuild is needed when fixture *.json files are added/removed/edited
+# without any .rs source changing. Touching the test file forces cargo to
+# treat it as changed and re-expand the macro against the current fixture
+# set before every conformance run, so newly-added fixtures actually get
+# exercised instead of silently running against a stale cached test binary.
 conformance: ## Run all condarc conformance checks (conda/crate/openapi); each auto-skips if its backend is unavailable
+	touch $(CONFORMANCE_TEST_FILE)
 	$(CONFORMANCE_TEST) -- --nocapture
 
 conformance-conda: ## Run only the conda-oracle condarc conformance checks (check_conda)
+	touch $(CONFORMANCE_TEST_FILE)
 	ALLEZ_CONFORMANCE_SKIP_CRATE=1 ALLEZ_CONFORMANCE_SKIP_OPENAPI=1 $(CONFORMANCE_TEST) -- --nocapture
 
 conformance-crate: ## Run only the condarc-crate condarc conformance checks (check_crate; GEN-36, currently always skipped)
+	touch $(CONFORMANCE_TEST_FILE)
 	ALLEZ_CONFORMANCE_SKIP_CONDA=1 ALLEZ_CONFORMANCE_SKIP_OPENAPI=1 $(CONFORMANCE_TEST) -- --nocapture
 
 conformance-openapi: ## Run only the openapi-schema condarc conformance checks (check_openapi)
+	touch $(CONFORMANCE_TEST_FILE)
 	ALLEZ_CONFORMANCE_SKIP_CONDA=1 ALLEZ_CONFORMANCE_SKIP_CRATE=1 $(CONFORMANCE_TEST) -- --nocapture
+
+regenerate-condarc-fixtures: ## Delete every condarc fixture and rerun all scripts/generate_*.py against a real conda oracle (every fixture, including former hand-authored root-shape ones, is now owned by a generator -- see generate_root_shape_condarc_fixtures.py)
+	find $(CONFORMANCE_VALID_DIR) $(CONFORMANCE_INVALID_DIR) -maxdepth 1 -name '*.json' -delete
+	@for script in scripts/generate_*.py; do \
+		echo "=== $$script ==="; \
+		python3 "$$script" || exit 1; \
+	done
+	touch $(CONFORMANCE_TEST_FILE)

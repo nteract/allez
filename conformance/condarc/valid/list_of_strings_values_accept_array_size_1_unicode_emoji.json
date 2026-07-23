@@ -1,0 +1,56 @@
+{
+  "channels": [
+    "\ud83d\ude00\ud83c\udf89"
+  ],
+  "default_channels": [
+    "\ud83d\ude00\ud83c\udf89"
+  ],
+  "allowlist_channels": [
+    "\ud83d\ude00\ud83c\udf89"
+  ],
+  "denylist_channels": [
+    "\ud83d\ude00\ud83c\udf89"
+  ],
+  "migrated_channel_aliases": [
+    "\ud83d\ude00\ud83c\udf89"
+  ],
+  "repodata_fns": [
+    "\ud83d\ude00\ud83c\udf89"
+  ],
+  "experimental": [
+    "\ud83d\ude00\ud83c\udf89"
+  ],
+  "envs_dirs": [
+    "\ud83d\ude00\ud83c\udf89"
+  ],
+  "pkgs_dirs": [
+    "\ud83d\ude00\ud83c\udf89"
+  ],
+  "preview": [
+    "\ud83d\ude00\ud83c\udf89"
+  ],
+  "aggressive_update_packages": [
+    "\ud83d\ude00\ud83c\udf89"
+  ],
+  "create_default_packages": [
+    "\ud83d\ude00\ud83c\udf89"
+  ],
+  "disallowed_packages": [
+    "\ud83d\ude00\ud83c\udf89"
+  ],
+  "pinned_packages": [
+    "\ud83d\ude00\ud83c\udf89"
+  ],
+  "track_features": [
+    "\ud83d\ude00\ud83c\udf89"
+  ],
+  "shortcuts_only": [
+    "\ud83d\ude00\ud83c\udf89"
+  ],
+  "export_platforms": [
+    "\ud83d\ude00\ud83c\udf89"
+  ],
+  "subdirs": [
+    "\ud83d\ude00\ud83c\udf89"
+  ]
+}

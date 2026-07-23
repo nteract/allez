@@ -1,0 +1,7 @@
+{
+  "custom_multichannels": {
+    "mc": [
+      "a\u0000b"
+    ]
+  }
+}

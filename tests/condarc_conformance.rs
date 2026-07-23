@@ -69,6 +69,7 @@ use std::env;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
 
 use rstest::rstest;
 use serde_json::Value;
@@ -204,7 +205,7 @@ fn which_conda() -> Option<PathBuf> {
 /// is on `PATH` (a bare `python3` on `PATH` is frequently a
 /// *different*, conda-less interpreter than the one conda itself
 /// runs under).
-fn find_conda_python() -> Option<PathBuf> {
+fn probe_conda_python() -> Option<PathBuf> {
     if let Ok(p) = env::var("ALLEZ_CONFORMANCE_PYTHON") {
         let p = PathBuf::from(p);
         return python_has_conda(&p).then_some(p);
@@ -224,6 +225,19 @@ fn find_conda_python() -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// Cached result of [`probe_conda_python`]. Every fixture x checker
+/// test case calls [`find_conda_python`], and the probe itself spawns
+/// a `python3 -c "import conda"` subprocess (sometimes two, if the
+/// bare `python3` on `PATH` doesn't have conda) -- caching means that
+/// subprocess spawn happens once per test binary invocation instead
+/// of once per case, regardless of how many test threads call it
+/// concurrently.
+static CONDA_PYTHON: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+fn find_conda_python() -> Option<PathBuf> {
+    CONDA_PYTHON.get_or_init(probe_conda_python).clone()
 }
 
 fn check_conda(value: &Value) -> CheckOutcome {

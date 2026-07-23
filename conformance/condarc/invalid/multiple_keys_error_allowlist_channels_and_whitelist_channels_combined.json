@@ -1,0 +1,8 @@
+{
+  "allowlist_channels": [
+    "conda-forge"
+  ],
+  "whitelist_channels": [
+    "conda-forge"
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "export_platforms": [
+    "linux-64"
+  ],
+  "extra_platforms": [
+    "linux-64"
+  ]
+}

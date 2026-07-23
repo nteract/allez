@@ -1,0 +1,8 @@
+{
+  "override_virtual_packages": {
+    "cuda": "11.0"
+  },
+  "virtual_packages": {
+    "cuda": "11.0"
+  }
+}

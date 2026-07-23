@@ -1,0 +1,4 @@
+{
+  "solver": "libmamba",
+  "experimental_solver": "libmamba"
+}

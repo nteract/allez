@@ -93,9 +93,14 @@ Usage:
         checked-in expected/*.json without the test run itself ever
         regenerating that file.
 
-Requires a Python interpreter with `conda` importable. Resolution order
-matches `tests/condarc_conformance.rs`'s `find_conda_python` (see other
-`generate_*.py` scripts for the identical helper).
+Requires a Python interpreter with `conda` importable. In no-argument
+mode, resolution order matches `tests/condarc_conformance.rs`'s
+`find_conda_python` (see other `generate_*.py` scripts for the identical
+helper) -- this mode is a standalone local-dev command, so it must locate
+a conda-capable interpreter itself. `--fixture` mode instead just uses
+`sys.executable` (see `main()`): it's only ever invoked by
+`tests/condarc_conformance.rs`, which has already resolved and verified
+one, and runs this script under it directly.
 """
 
 from __future__ import annotations
@@ -390,7 +395,20 @@ def main() -> int:
                 "                   behavior against the checked-in expected fixture\n"
                 "                   without regenerating it."
             )
-        python = find_conda_python()
+        # Unlike the no-argument mode below (a standalone local-dev
+        # command, `make regenerate-condarc-fixtures`, which must locate
+        # a conda-capable interpreter itself via `find_conda_python()`),
+        # `--fixture` mode is only ever invoked by
+        # `tests/condarc_conformance.rs`'s `assert_conda_expected_
+        # representation`, which has *already* resolved and verified a
+        # conda-capable interpreter and is running this very script
+        # under it. `sys.executable` -- this process's own interpreter --
+        # is therefore always correct here, without re-deriving anything
+        # from `$PATH`/`$CONDA`: it sidesteps this script's independent
+        # (and, on CI runners whose `conda` launcher lives in a
+        # `condabin/` separate from the real interpreter's `bin/`,
+        # previously buggy) copy of that PATH-probing logic entirely.
+        python = sys.executable
         sys.stdout.write(emit_single_fixture(python, Path(args[1])))
         return 0
 

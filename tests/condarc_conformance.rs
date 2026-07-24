@@ -221,6 +221,18 @@ fn python_has_conda(python: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Candidate python interpreter paths under a conda installation root
+/// (e.g. `$CONDA`, or the parent of a `condabin/` directory found on
+/// `PATH`). Unix layouts put the interpreter at `<root>/bin/python3`;
+/// Windows layouts put `python.exe` directly under `<root>`.
+fn python_candidates_under_root(root: &Path) -> Vec<PathBuf> {
+    if cfg!(windows) {
+        vec![root.join("python.exe")]
+    } else {
+        vec![root.join("bin/python3"), root.join("bin/python")]
+    }
+}
+
 /// Locates the first `conda`-capable `conda` executable on `PATH`
 /// (without invoking it), so we can find the Python interpreter that
 /// ships alongside it.
@@ -236,11 +248,28 @@ fn which_conda() -> Option<PathBuf> {
 }
 
 /// Finds a Python interpreter with `conda` importable, trying (in
-/// order): `$ALLEZ_CONFORMANCE_PYTHON`, a bare `python3` on `PATH`,
-/// then the interpreter shipped alongside whatever `conda` executable
-/// is on `PATH` (a bare `python3` on `PATH` is frequently a
-/// *different*, conda-less interpreter than the one conda itself
-/// runs under).
+/// order):
+///
+///   1. `$ALLEZ_CONFORMANCE_PYTHON`.
+///   2. A bare `python3` on `PATH`.
+///   3. `$CONDA/bin/python3` (or `python`) -- `$CONDA` is set by common
+///      installers/CI actions (e.g. `conda-incubator/setup-miniconda`)
+///      to the conda installation *root*. That root's `condabin/`
+///      subdirectory (containing only the `conda` launcher script, not
+///      python) is typically what such actions put on `PATH`, not
+///      `bin/` (where the real interpreter lives) -- so this step
+///      exists specifically to not miss that layout.
+///   4. The interpreter shipped in the same directory as whatever
+///      `conda` executable is on `PATH` (covers installs that
+///      co-locate `conda` and `python` in one `bin/`), or, if that
+///      `conda` turned out to live in a `condabin/` directory, its
+///      sibling `bin/` under the same install root (covers the same
+///      `condabin`-on-`PATH` layout as step 3, but without requiring
+///      `$CONDA` to be set).
+///
+/// A bare `python3` on `PATH` is frequently a *different*, conda-less
+/// interpreter than the one conda itself runs under, hence not
+/// stopping at step 2 alone.
 fn probe_conda_python() -> Option<PathBuf> {
     if let Ok(p) = env::var("ALLEZ_CONFORMANCE_PYTHON") {
         let p = PathBuf::from(p);
@@ -252,12 +281,29 @@ fn probe_conda_python() -> Option<PathBuf> {
         return Some(candidate);
     }
 
+    if let Ok(root) = env::var("CONDA") {
+        for candidate in python_candidates_under_root(Path::new(&root)) {
+            if candidate.is_file() && python_has_conda(&candidate) {
+                return Some(candidate);
+            }
+        }
+    }
+
     let conda_path = which_conda()?;
     let dir = conda_path.parent()?;
     for name in ["python3", "python"] {
         let candidate = dir.join(name);
         if candidate.is_file() && python_has_conda(&candidate) {
             return Some(candidate);
+        }
+    }
+    if dir.file_name().and_then(|n| n.to_str()) == Some("condabin") {
+        if let Some(root) = dir.parent() {
+            for candidate in python_candidates_under_root(root) {
+                if candidate.is_file() && python_has_conda(&candidate) {
+                    return Some(candidate);
+                }
+            }
         }
     }
     None
@@ -295,9 +341,11 @@ fn find_conda_python() -> Option<PathBuf> {
         panic!(
             "no python interpreter with `conda` importable was found, but CI=true -- the \
              conda oracle is required in CI, not an optional skip (checked \
-             $ALLEZ_CONFORMANCE_PYTHON, `python3` on PATH, and the interpreter shipped \
-             alongside `conda` on PATH). If this is the conformance CI job, check that the \
-             miniconda setup step ran and put `conda`/`python3` on PATH before this step."
+             $ALLEZ_CONFORMANCE_PYTHON, `python3` on PATH, `$CONDA/bin/python3`, and the \
+             interpreter shipped alongside `conda` on PATH -- see probe_conda_python's docs \
+             for the full lookup order). If this is the conformance CI job, check that the \
+             miniconda setup step ran and actually set up `conda`/`python3`/`$CONDA` before \
+             this step."
         );
     }
     found
@@ -307,8 +355,8 @@ fn check_conda(value: &Value) -> CheckOutcome {
     let Some(python) = find_conda_python() else {
         return CheckOutcome::Skipped(
             "no python interpreter with `conda` importable found (checked \
-             $ALLEZ_CONFORMANCE_PYTHON, `python3` on PATH, and the interpreter \
-             shipped alongside `conda` on PATH)"
+             $ALLEZ_CONFORMANCE_PYTHON, `python3` on PATH, `$CONDA/bin/python3`, and the \
+             interpreter shipped alongside `conda` on PATH)"
                 .to_string(),
         );
     };

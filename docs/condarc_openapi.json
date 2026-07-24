@@ -13,7 +13,7 @@
           "object",
           "null"
         ],
-        "description": "A .condarc document. `additionalProperties: false` is deliberate and will stay true as more keys are added below -- every real .condarc key must be explicitly modeled here, not merely tolerated. This is an intentionally *stricter* contract than real conda's own silent tolerance of unrecognized keys (docs/condarc_research.md §1.2) -- this schema is meant to be a maximally accurate, fully-specified reference, not a passthrough. The root `type` also permits `null`: a bare YAML `~`/empty file (JSON-serialized as `null`) is silently treated by conda as \"no settings\" and is valid (docs/condarc_research.md §1.1 / §11's root-shape cases), whereas a list or scalar root crashes conda and is rejected here.",
+        "description": "A .condarc document. `additionalProperties: true` mirrors real conda's own silent tolerance of unrecognized keys (docs/condarc_research.md §1.2) -- an unmodeled key is passed through rather than rejected, so this schema is a best-effort reference for the documented keys below, not a closed/exhaustive contract. The root `type` also permits `null`: a bare YAML `~`/empty file (JSON-serialized as `null`) is silently treated by conda as \"no settings\" and is valid (docs/condarc_research.md §1.1 / §11's root-shape cases), whereas a list or scalar root crashes conda and is rejected here.",
         "additionalProperties": true,
         "properties": {
           "channel_alias": {
@@ -552,8 +552,7 @@
                     {
                       "properties": {
                         "client_ssl_cert_key": {
-                          "type": "string",
-                          "minLength": 1
+                          "$ref": "#/components/schemas/CondaStringTruthy"
                         }
                       },
                       "required": [
@@ -563,8 +562,7 @@
                     {
                       "properties": {
                         "client_cert_key": {
-                          "type": "string",
-                          "minLength": 1
+                          "$ref": "#/components/schemas/CondaStringTruthy"
                         }
                       },
                       "required": [
@@ -579,8 +577,7 @@
                       {
                         "properties": {
                           "client_ssl_cert": {
-                            "type": "string",
-                            "minLength": 1
+                            "$ref": "#/components/schemas/CondaStringTruthy"
                           }
                         },
                         "required": [
@@ -590,8 +587,7 @@
                       {
                         "properties": {
                           "client_cert": {
-                            "type": "string",
-                            "minLength": 1
+                            "$ref": "#/components/schemas/CondaStringTruthy"
                           }
                         },
                         "required": [
@@ -614,14 +610,7 @@
                     {
                       "properties": {
                         "always_copy": {
-                          "enum": [
-                            true,
-                            "true",
-                            "True",
-                            "yes",
-                            "on",
-                            1
-                          ]
+                          "$ref": "#/components/schemas/CondaTruthy"
                         }
                       },
                       "required": [
@@ -631,14 +620,7 @@
                     {
                       "properties": {
                         "copy": {
-                          "enum": [
-                            true,
-                            "true",
-                            "True",
-                            "yes",
-                            "on",
-                            1
-                          ]
+                          "$ref": "#/components/schemas/CondaTruthy"
                         }
                       },
                       "required": [
@@ -652,14 +634,7 @@
                     {
                       "properties": {
                         "always_softlink": {
-                          "enum": [
-                            true,
-                            "true",
-                            "True",
-                            "yes",
-                            "on",
-                            1
-                          ]
+                          "$ref": "#/components/schemas/CondaTruthy"
                         }
                       },
                       "required": [
@@ -669,14 +644,7 @@
                     {
                       "properties": {
                         "softlink": {
-                          "enum": [
-                            true,
-                            "true",
-                            "True",
-                            "yes",
-                            "on",
-                            1
-                          ]
+                          "$ref": "#/components/schemas/CondaTruthy"
                         }
                       },
                       "required": [
@@ -898,6 +866,42 @@
           {
             "type": "string",
             "pattern": "^\\s*([+-]?(\\d[\\d_]*(\\.[\\d_]*)?|\\.[\\d_]+)([eE][+-]?\\d+)?([+-]([+-]?(\\d[\\d_]*(\\.[\\d_]*)?|\\.[\\d_]+)([eE][+-]?\\d+)?))?[jJ]?)?\\s*$|^\\s*([tT][rR][uU][eE]|[fF][aA][lL][sS][eE]|[yY][eE][sS]|[nN][oO]|[oO][nN]|[oO][fF][fF]|[yY]|[nN]|[nN][oO][nN]|[nN][oO][nN][eE])\\s*$"
+          }
+        ]
+      },
+      "CondaTruthy": {
+        "description": "Matches a value that is \"truthy\" per conda's `boolify()`/`bool()` coercion semantics (see CondaBool above), used by the always_copy/copy vs. always_softlink/softlink mutual-exclusion cross-field rule (post_build_validation rule 2, docs/condarc_research.md §1.4). A JSON boolean `true` is truthy. A JSON number is truthy for ANY nonzero value -- not just the literal `1` -- mirroring Python's `bool(value)` applied to an int/float (`bool(2) == bool(-5) == bool(3.5) == True`); only `0`/`0.0` (and `-0`/`-0.0`, which JSON Schema's numeric `const: 0` treats as equal to `0`) are falsy. Among strings, only `boolify()`'s BOOLISH_TRUE tokens (`true`/`yes`/`on`/`y`, case-insensitive, whitespace-trimmable) are matched; BOOLISH_FALSE tokens and numeric strings are deliberately NOT matched here -- unlike the number case, \"is this numeric string's coerced value nonzero\" can't be expressed with a JSON Schema regex without arithmetic, so this component intentionally under-approximates that one sub-case (numeric-string truthiness) rather than over-matching it, consistent with the rule's own $comment that truthiness here is approximated.",
+        "oneOf": [
+          {
+            "const": true
+          },
+          {
+            "type": "number",
+            "not": {
+              "const": 0
+            }
+          },
+          {
+            "type": "string",
+            "pattern": "^\\s*([tT][rR][uU][eE]|[yY][eE][sS]|[oO][nN]|[yY])\\s*$"
+          }
+        ]
+      },
+      "CondaStringTruthy": {
+        "description": "Matches a value that is \"truthy\" for a nullable `(str, NoneType)` .condarc key with NO custom validation -- `client_ssl_cert`/`client_cert` and `client_ssl_cert_key`/`client_cert_key` (see CondaNullableString above) -- as used by the post_build_validation rule 1 cross-field check (docs/condarc_research.md §1.4). Because these keys are str-typed (not bool-typed), truthiness is evaluated on the *coerced string*, not on the raw JSON value: a JSON number or boolean stringifies via `str(value)` to a non-empty string (`str(0) == \"0\"`, `str(False) == \"False\"`), which is truthy in Python even though `bool(0)`/`bool(False)` on the raw value would be falsy -- this is why the rule's own $comment says \"a non-empty string or a truthy scalar\", and why this is intentionally NOT the same as CondaTruthy (which is bool-typed truthiness, where a nonzero *number* is truthy but the number `0` itself is falsy). Verified empirically against a real conda install: `client_ssl_cert_key: 0`, `: false`, and `: 5` are all truthy (raise/require `client_ssl_cert` when alone); only a JSON `null` or the raw empty string `\"\"` are falsy here. The string branch below additionally excludes two more falsy shapes, also verified empirically and symmetric across all four properties (cert_key *and* cert side): (1) a whitespace-only string (any length, e.g. \"   \"/\"\\t\\n\") -- apparently strips to empty during coercion and is falsy the same way `\"\"` is; and (2) the literal string \"none\", case-insensitively and whitespace-padded (e.g. \"None\", \"  NoNe\\t\") -- this specific `(str, NoneType)` coercion path special-cases that one token into real Python `None`, mirroring CondaNullableString's own documented \"none\"-to-None coercion. Neither is a substring/prefix match: \"non\" (missing the trailing e) and \"none x\" (trailing content after the token) are NOT special-cased and remain truthy, matched by requiring the ENTIRE string (after trimming) to equal \"none\" via `^\\s*none\\s*$` anchors rather than a bare `none` search. A plain non-\"none\" numeric-looking string like `\"0\"` also stays truthy here (it's a string, not the JSON number `0` -- that's CondaTruthy's/the number branch's concern, not this one's).",
+        "oneOf": [
+          {
+            "type": "string",
+            "pattern": "\\S",
+            "not": {
+              "pattern": "^\\s*[nN][oO][nN][eE]\\s*$"
+            }
+          },
+          {
+            "type": [
+              "number",
+              "boolean"
+            ]
           }
         ]
       },

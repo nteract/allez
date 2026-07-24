@@ -19,6 +19,12 @@ test: ## Run the full cargo test suite
 # treat it as changed and re-expand the macro against the current fixture
 # set before every conformance run, so newly-added fixtures actually get
 # exercised instead of silently running against a stale cached test binary.
+# See the "Always invoke via `make conformance*`" section of
+# tests/condarc_conformance.rs's module doc comment for the full
+# rationale (incl. why this is a deliberate fix, not a build.rs stopgap)
+# -- the same touch is duplicated in .github/workflows/ci.yml's
+# `conformance` job for the same reason. If you add a new
+# `make conformance-*` variant, touch here too.
 conformance: ## Run all condarc conformance checks (conda/crate/openapi); each auto-skips if its backend is unavailable
 	touch $(CONFORMANCE_TEST_FILE)
 	$(CONFORMANCE_TEST) -- --nocapture

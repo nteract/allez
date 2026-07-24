@@ -51,7 +51,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: conda-incubator/setup-miniconda@v3
         with:
-          auto-update-conda: true
+          auto-update-conda: false
           conda-version: "26.5.3"
           python-version: "3.12"
       - shell: bash -l {0}

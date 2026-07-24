@@ -120,6 +120,125 @@ CASES: list[tuple[str, dict, bool, str | None]] = [
         True,
         None,
     ),
+    # --- Rule 1, non-string-scalar truthy boundary: client_ssl_cert_key
+    # (and client_ssl_cert) are nullable *strings*, so conda coerces via
+    # `str(value)` before the rule's own `bool(...)` truthy check runs.
+    # That means `0` and `False` are truthy here too -- `str(0) == "0"`
+    # and `str(False) == "False"` are both non-empty strings, unlike
+    # `bool(0)`/`bool(False)` on the raw values, which would be falsy.
+    # Only a JSON `null` or the literal empty string `""` stay falsy
+    # (see the accept_client_ssl_cert_key_empty_string/_null cases
+    # above). The current schema's cross-field check only recognizes
+    # `{"type": "string", "minLength": 1}` as truthy, so it misses
+    # this entirely -- these cases pin down that gap on both the
+    # reject side (a falsy-looking number/bool alone still triggers
+    # the rule) and the accept side (a falsy-looking number/bool
+    # satisfies the "cert is present" half too).
+    (
+        "post_build_validation_reject_client_ssl_cert_key_int_zero_without_cert.json",
+        {"client_ssl_cert_key": 0},
+        False,
+        "client_ssl_cert' is required",
+    ),
+    (
+        "post_build_validation_reject_client_ssl_cert_key_bool_false_without_cert.json",
+        {"client_ssl_cert_key": False},
+        False,
+        "client_ssl_cert' is required",
+    ),
+    (
+        "post_build_validation_accept_client_ssl_cert_key_int_and_cert_bool_false.json",
+        {"client_ssl_cert_key": 5, "client_ssl_cert": False},
+        True,
+        None,
+    ),
+    (
+        "post_build_validation_accept_client_ssl_cert_key_and_cert_both_int_zero.json",
+        {"client_ssl_cert_key": 0, "client_ssl_cert": 0},
+        True,
+        None,
+    ),
+    # --- Rule 1, the-string-"none" / whitespace-only falsy special case:
+    # client_ssl_cert_key/client_cert_key AND client_ssl_cert/client_cert
+    # are `(str, NoneType)` -- per CondaNullableString, the coercion for
+    # these specific keys treats the literal string "none" (any case,
+    # whitespace-padded) as real Python `None`, and empirically a
+    # whitespace-only string (no non-whitespace chars at all) also ends
+    # up falsy the same way `""` does. So unlike a generic non-empty
+    # string (which is truthy, `minLength: 1`), these two shapes are
+    # falsy despite having length >= 1. This applies symmetrically to
+    # BOTH sides of the rule: cert_key="none" bypasses the rule the same
+    # way cert_key="" does, AND cert="none"/whitespace-only counts as
+    # "cert is absent" the same way a missing cert does. The current
+    # schema (as of the previous CondaStringTruthy fix) treats *any*
+    # non-empty string as truthy, so it doesn't yet know about this
+    # falsy special case -- these accept/reject pairs pin it down on
+    # both keys, plus boundary guards ("non", "none x", string "0") to
+    # make sure the eventual fix doesn't overshoot into treating
+    # near-miss strings as falsy too.
+    (
+        "post_build_validation_accept_client_ssl_cert_key_none_string_without_cert.json",
+        {"client_ssl_cert_key": "none"},
+        True,
+        None,
+    ),
+    (
+        "post_build_validation_accept_client_ssl_cert_key_none_string_mixed_case_padded.json",
+        {"client_ssl_cert_key": "  NoNe\t"},
+        True,
+        None,
+    ),
+    (
+        "post_build_validation_accept_client_ssl_cert_key_whitespace_only.json",
+        {"client_ssl_cert_key": "   "},
+        True,
+        None,
+    ),
+    (
+        "post_build_validation_accept_client_cert_key_alias_none_string.json",
+        {"client_cert_key": "none"},
+        True,
+        None,
+    ),
+    (
+        "post_build_validation_reject_client_ssl_cert_none_string_with_key_combined.json",
+        {"client_ssl_cert_key": "x", "client_ssl_cert": "none"},
+        False,
+        "client_ssl_cert' is required",
+    ),
+    (
+        "post_build_validation_reject_client_ssl_cert_whitespace_only_with_key_combined.json",
+        {"client_ssl_cert_key": "x", "client_ssl_cert": "   "},
+        False,
+        "client_ssl_cert' is required",
+    ),
+    (
+        "post_build_validation_reject_client_cert_alias_none_string_with_key_combined.json",
+        {"client_ssl_cert_key": "x", "client_cert": "none"},
+        False,
+        "client_ssl_cert' is required",
+    ),
+    # Boundary guards: near-misses of "none" must stay truthy, so a fix
+    # for the above doesn't overshoot into a broader "contains none" or
+    # "looks falsy" match.
+    (
+        "post_build_validation_reject_client_ssl_cert_key_string_non_without_cert.json",
+        {"client_ssl_cert_key": "non"},
+        False,
+        "client_ssl_cert' is required",
+    ),
+    (
+        "post_build_validation_reject_client_ssl_cert_key_string_none_suffix_without_cert.json",
+        {"client_ssl_cert_key": "none x"},
+        False,
+        "client_ssl_cert' is required",
+    ),
+    (
+        "post_build_validation_reject_client_ssl_cert_key_string_zero_without_cert.json",
+        {"client_ssl_cert_key": "0"},
+        False,
+        "client_ssl_cert' is required",
+    ),
     # --- Rule 2: always_copy / always_softlink mutual exclusivity ---
     # Filename kept stable: this is the pre-existing fixture named
     # directly in tests/condarc_conformance.rs's module docs as the
@@ -147,6 +266,38 @@ CASES: list[tuple[str, dict, bool, str | None]] = [
         {"always_softlink": True},
         True,
         None,
+    ),
+    # --- Rule 2, truthy-number boundary: any nonzero int is truthy, not
+    # just the literal 1 (bool(2) == bool(-2) == True in Python, which is
+    # what conda's post_build_validation ultimately checks). These pin
+    # down that boundary on both the accept side (2 / -2 alone is fine,
+    # same as `1` alone) and the reject side (2 / -2 combined with the
+    # other truthy key is still mutually exclusive, same as `True`
+    # combined) -- proving the rule keys off numeric truthiness generally,
+    # not off a hardcoded `1`.
+    (
+        "post_build_validation_accept_always_copy_int_2_only.json",
+        {"always_copy": 2},
+        True,
+        None,
+    ),
+    (
+        "post_build_validation_accept_always_softlink_int_neg_2_only.json",
+        {"always_softlink": -2},
+        True,
+        None,
+    ),
+    (
+        "post_build_validation_reject_always_copy_int_2_and_softlink_combined.json",
+        {"always_copy": 2, "always_softlink": True},
+        False,
+        "mutually exclusive",
+    ),
+    (
+        "post_build_validation_reject_always_copy_and_softlink_int_neg_2_combined.json",
+        {"always_copy": True, "always_softlink": -2},
+        False,
+        "mutually exclusive",
     ),
     # --- Both rules satisfied simultaneously, in one document ---
     (

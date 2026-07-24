@@ -83,6 +83,54 @@
 //! loudly on a broken/missing conda install instead of silently skipping
 //! every conda-oracle case.
 //!
+//! That same "unavailable backend is a skip, but broken-once-it-started
+//! is a hard failure under `CI=true`" split also applies *after* a
+//! backend has been located: once `find_conda_python` has already
+//! succeeded, a subsequent tempfile-creation failure, subprocess-spawn
+//! failure, or unexpected (neither `0` nor `1`) exit code from the
+//! conda oracle (in [`check_conda`] and
+//! [`assert_conda_expected_representation`]) no longer indicates "conda
+//! isn't set up" -- it indicates the oracle broke mid-run, which is just
+//! as much a CI-worthy hard failure as a missing interpreter. The same
+//! goes for [`check_openapi`]'s schema *parsing* (as opposed to the
+//! schema file simply not existing yet, which is still a legitimate
+//! permanent skip -- see that function's own comments): a checked-in
+//! `docs/condarc_openapi.json` that fails to parse, or whose
+//! `Condarc` subschema fails to compile, is corrupt, not absent. See
+//! [`skip_or_ci_panic`] for the shared helper backing this.
+//!
+//! ## Always invoke via `make conformance*` (or copy its `touch`)
+//!
+//! `valid_condarc_is_accepted` and `invalid_condarc_is_rejected` below
+//! glob `conformance/condarc/{valid,invalid}/*.json` via rstest's
+//! `#[files(...)]`, which expands *at proc-macro time during
+//! compilation* -- not at runtime. Cargo's rebuild decision is based
+//! solely on its own tracked inputs (`.rs`/`Cargo.toml` mtimes,
+//! `Cargo.lock`, etc.); it has no visibility into files a proc macro
+//! happened to read while expanding, so adding/removing/editing a
+//! fixture *without touching any `.rs` file* will not, by itself,
+//! trigger a rebuild. Running `cargo test --test condarc_conformance
+//! --features conformance-tests` directly after only changing fixtures
+//! will silently keep executing the previously-compiled test binary
+//! against the previously-compiled (stale) fixture set.
+//!
+//! Both places that matter -- the `make conformance*` targets and the
+//! `conformance` job in `.github/workflows/ci.yml` -- work around this
+//! by running `touch tests/condarc_conformance.rs` immediately before
+//! the `cargo test` invocation, which is enough to force cargo to
+//! recompile (and thus re-expand the `#[files(...)]` glob) every time.
+//! This is a deliberate, low-cost fix for a real rstest limitation
+//! (rstest doesn't use `tracked_path`/`include_str!` to register the
+//! glob's fixture files as compiler inputs), not a stopgap awaiting a
+//! `build.rs`: a `build.rs` would need to duplicate this same
+//! directory-scan-and-invalidate logic (and get directory-mtime
+//! semantics right across filesystems) just to force the same
+//! recompile `touch` already forces for a few bytes of Makefile/CI
+//! YAML. If you need to run this suite by hand, run it through one of
+//! the `make conformance*` targets, or `touch` this file yourself
+//! first -- don't invoke `cargo test --test condarc_conformance`
+//! directly and expect newly-added fixtures to be picked up.
+//!
 //! ## Expected internal representation (conda only, `valid/` only)
 //!
 //! Accept/reject alone doesn't confirm a checker parsed a fixture's
@@ -297,12 +345,12 @@ fn probe_conda_python() -> Option<PathBuf> {
             return Some(candidate);
         }
     }
-    if dir.file_name().and_then(|n| n.to_str()) == Some("condabin") {
-        if let Some(root) = dir.parent() {
-            for candidate in python_candidates_under_root(root) {
-                if candidate.is_file() && python_has_conda(&candidate) {
-                    return Some(candidate);
-                }
+    if dir.file_name().and_then(|n| n.to_str()) == Some("condabin")
+        && let Some(root) = dir.parent()
+    {
+        for candidate in python_candidates_under_root(root) {
+            if candidate.is_file() && python_has_conda(&candidate) {
+                return Some(candidate);
             }
         }
     }
@@ -351,6 +399,26 @@ fn find_conda_python() -> Option<PathBuf> {
     found
 }
 
+/// Turns an unexpected-failure `reason` into a hard panic when `CI=true`,
+/// and into an ordinary [`CheckOutcome::Skipped`] otherwise.
+///
+/// Only meant for failures that happen *after* a backend has already
+/// been confirmed available (e.g. `find_conda_python` already
+/// succeeded) -- at that point, a tempfile-creation failure,
+/// subprocess-spawn failure, or unexpected exit code means the oracle
+/// broke mid-run, not that it's simply unavailable, so it deserves the
+/// same "fail loudly in CI" treatment as [`find_conda_python`]'s own
+/// missing-interpreter panic rather than a silent skip.
+fn skip_or_ci_panic(reason: String) -> CheckOutcome {
+    if is_ci() {
+        panic!(
+            "conda oracle broke mid-run, but CI=true -- treating this as a hard failure \
+             instead of a silent skip: {reason}"
+        );
+    }
+    CheckOutcome::Skipped(reason)
+}
+
 fn check_conda(value: &Value) -> CheckOutcome {
     let Some(python) = find_conda_python() else {
         return CheckOutcome::Skipped(
@@ -372,12 +440,12 @@ fn check_conda(value: &Value) -> CheckOutcome {
     let mut fixture = match tempfile::Builder::new().suffix(".yml").tempfile() {
         Ok(f) => f,
         Err(err) => {
-            return CheckOutcome::Skipped(format!("failed to create temp fixture file: {err}"));
+            return skip_or_ci_panic(format!("failed to create temp fixture file: {err}"));
         }
     };
     let text = serde_json::to_string(value).expect("fixture value should serialize to JSON");
     if let Err(err) = fixture.write_all(text.as_bytes()) {
-        return CheckOutcome::Skipped(format!("failed to write temp fixture file: {err}"));
+        return skip_or_ci_panic(format!("failed to write temp fixture file: {err}"));
     }
 
     let output = conda_free_command(&python)
@@ -388,7 +456,7 @@ fn check_conda(value: &Value) -> CheckOutcome {
     let output = match output {
         Ok(o) => o,
         Err(err) => {
-            return CheckOutcome::Skipped(format!("failed to run conda oracle subprocess: {err}"));
+            return skip_or_ci_panic(format!("failed to run conda oracle subprocess: {err}"));
         }
     };
 
@@ -396,7 +464,7 @@ fn check_conda(value: &Value) -> CheckOutcome {
     match output.status.code() {
         Some(0) => CheckOutcome::Valid,
         Some(1) => CheckOutcome::Invalid(stderr),
-        code => CheckOutcome::Skipped(format!(
+        code => skip_or_ci_panic(format!(
             "conda oracle exited unexpectedly (status={code:?}): {stderr}"
         )),
     }
@@ -509,9 +577,16 @@ fn assert_conda_expected_representation(fixture_path: &Path, value: &Value) {
     let output = match output {
         Ok(o) => o,
         Err(err) => {
+            let reason = format!("failed to run generate_zzz_condarc_expected_fixtures.py: {err}");
+            if is_ci() {
+                panic!(
+                    "[Conda expected] {} -- {reason}, but CI=true -- the conda oracle broke \
+                     mid-run, which is a hard failure, not a case for silently skipping",
+                    fixture_path.display(),
+                );
+            }
             println!(
-                "SKIPPED [Conda expected] {}: failed to run \
-                 generate_zzz_condarc_expected_fixtures.py: {err}",
+                "SKIPPED [Conda expected] {}: {reason}",
                 fixture_path.display()
             );
             return;
@@ -542,7 +617,8 @@ fn assert_conda_expected_representation(fixture_path: &Path, value: &Value) {
         .unwrap_or_else(|err| panic!("{} is not valid JSON: {err}", expected_path.display()));
 
     assert_eq!(
-        actual, expected,
+        actual,
+        expected,
         "[Conda expected] {} -- conda's live internal representation no longer matches {}. \
          If this is an intentional behavior change (e.g. a conda upgrade changed coercion \
          behavior), regenerate it with `make regenerate-condarc-fixtures` and review the \
@@ -599,11 +675,13 @@ fn openapi_schema_path() -> PathBuf {
 /// `jsonschema` side -- unknown sibling keywords (`components` isn't
 /// itself a JSON Schema keyword) are simply ignored by the validator.
 fn extract_condarc_schema(document: &Value) -> Result<Value, String> {
-    let condarc = document.pointer("/components/schemas/Condarc").ok_or_else(|| {
-        "missing components.schemas.Condarc (expected an OpenAPI 3.1 document with the \
+    let condarc = document
+        .pointer("/components/schemas/Condarc")
+        .ok_or_else(|| {
+            "missing components.schemas.Condarc (expected an OpenAPI 3.1 document with the \
          .condarc schema nested there)"
-            .to_string()
-    })?;
+                .to_string()
+        })?;
     let Value::Object(mut merged) = condarc.clone() else {
         return Err("components.schemas.Condarc is not a JSON object".to_string());
     };
@@ -615,6 +693,12 @@ fn extract_condarc_schema(document: &Value) -> Result<Value, String> {
 
 fn check_openapi(value: &Value) -> CheckOutcome {
     let schema_path = openapi_schema_path();
+    // Unlike the branches below, a missing schema file is a legitimate,
+    // permanent skip -- not gated on `is_ci()` via `skip_or_ci_panic` --
+    // since `docs/condarc_openapi.json` is still under active,
+    // iterative construction (see the module docs). Once the file
+    // exists, though, it's checked in and expected to always parse and
+    // compile; failures past this point are corruption, not absence.
     let schema_text = match std::fs::read_to_string(&schema_path) {
         Ok(text) => text,
         Err(_) => {
@@ -624,7 +708,7 @@ fn check_openapi(value: &Value) -> CheckOutcome {
     let document: Value = match serde_json::from_str(&schema_text) {
         Ok(v) => v,
         Err(err) => {
-            return CheckOutcome::Skipped(format!(
+            return skip_or_ci_panic(format!(
                 "{} is not valid JSON: {err}",
                 schema_path.display()
             ));
@@ -633,13 +717,13 @@ fn check_openapi(value: &Value) -> CheckOutcome {
     let schema = match extract_condarc_schema(&document) {
         Ok(v) => v,
         Err(err) => {
-            return CheckOutcome::Skipped(format!("{}: {err}", schema_path.display()));
+            return skip_or_ci_panic(format!("{}: {err}", schema_path.display()));
         }
     };
     let validator = match jsonschema::validator_for(&schema) {
         Ok(v) => v,
         Err(err) => {
-            return CheckOutcome::Skipped(format!(
+            return skip_or_ci_panic(format!(
                 "{} components.schemas.Condarc is not a valid JSON Schema: {err}",
                 schema_path.display()
             ));
@@ -697,27 +781,27 @@ struct InvalidCase {
 /// so splitting them apart would make each half spuriously valid --
 /// see the module docs above).
 fn invalid_cases(path: &Path, value: Value) -> Vec<InvalidCase> {
-    if !is_combined_fixture(path) {
-        if let Value::Object(obj) = value {
-            assert!(
-                !obj.is_empty(),
-                "{} is an empty JSON object -- there are no keys to test individually. \
-                 If this is intentional, rename the fixture with a `{COMBINED_SUFFIX}` \
-                 suffix so its whole (empty) document is tested as a single case instead.",
-                path.display()
-            );
-            return obj
-                .into_iter()
-                .map(|(key, val)| {
-                    let mut single = serde_json::Map::new();
-                    single.insert(key.clone(), val);
-                    InvalidCase {
-                        label: key,
-                        value: Value::Object(single),
-                    }
-                })
-                .collect();
-        }
+    if !is_combined_fixture(path)
+        && let Value::Object(obj) = value
+    {
+        assert!(
+            !obj.is_empty(),
+            "{} is an empty JSON object -- there are no keys to test individually. \
+             If this is intentional, rename the fixture with a `{COMBINED_SUFFIX}` \
+             suffix so its whole (empty) document is tested as a single case instead.",
+            path.display()
+        );
+        return obj
+            .into_iter()
+            .map(|(key, val)| {
+                let mut single = serde_json::Map::new();
+                single.insert(key.clone(), val);
+                InvalidCase {
+                    label: key,
+                    value: Value::Object(single),
+                }
+            })
+            .collect();
     }
     vec![InvalidCase {
         label: "<whole file>".to_string(),

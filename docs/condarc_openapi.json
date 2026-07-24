@@ -14,7 +14,7 @@
           "null"
         ],
         "description": "A .condarc document. `additionalProperties: false` is deliberate and will stay true as more keys are added below -- every real .condarc key must be explicitly modeled here, not merely tolerated. This is an intentionally *stricter* contract than real conda's own silent tolerance of unrecognized keys (docs/condarc_research.md §1.2) -- this schema is meant to be a maximally accurate, fully-specified reference, not a passthrough. The root `type` also permits `null`: a bare YAML `~`/empty file (JSON-serialized as `null`) is silently treated by conda as \"no settings\" and is valid (docs/condarc_research.md §1.1 / §11's root-shape cases), whereas a list or scalar root crashes conda and is rejected here.",
-        "additionalProperties": false,
+        "additionalProperties": true,
         "properties": {
           "channel_alias": {
             "description": "Base URL for constructing channel URLs from bare channel names (e.g. \"my-channel\" -> \"{channel_alias}/my-channel\"). Must have a URL scheme unless empty -- see CondaChannelAliasString.",

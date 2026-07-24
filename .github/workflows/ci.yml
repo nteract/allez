@@ -30,3 +30,27 @@ jobs:
         with:
           targets: aarch64-unknown-linux-gnu
       - run: cargo check --locked --target aarch64-unknown-linux-gnu
+
+  # Separate job (rather than folded into `test` above) because the condarc
+  # conformance suite shells out to a real conda oracle for every fixture
+  # and is comparatively slow -- keeping it isolated means it doesn't hold
+  # up the fast unit-test feedback loop in the `test` job above, which
+  # doesn't build/run this suite at all (it's feature-gated behind
+  # `conformance-tests`; see Cargo.toml and tests/condarc_conformance.rs).
+  # `CI=true` is set automatically by GitHub Actions, which makes the
+  # conda-oracle checks in that suite fail loudly instead of silently
+  # skipping if miniconda isn't actually on PATH by the time this runs.
+  conformance:
+    name: condarc conformance tests (conda oracle)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          auto-update-conda: true
+          python-version: "3.12"
+      - shell: bash -l {0}
+        run: |
+          touch tests/condarc_conformance.rs
+          cargo test --test condarc_conformance --features conformance-tests --locked -- --nocapture

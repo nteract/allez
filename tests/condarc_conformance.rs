@@ -71,6 +71,18 @@
 //! (set to `1` or `true`). See the `Makefile`'s `conformance-*` targets
 //! for running one checker at a time.
 //!
+//! This whole test binary only builds/runs with `--features
+//! conformance-tests` (see the `[[test]]` entry in `Cargo.toml`), so a
+//! plain `cargo test --all` -- the normal local dev workflow -- never
+//! even compiles it; it's treated as a separate, slower integration-test
+//! tier rather than a unit test. The one exception to "unavailable
+//! backend is a skip, not a failure" is the conda oracle specifically:
+//! when `CI=true` (set automatically by GitHub Actions and most other CI
+//! providers), [`find_conda_python`] panics instead of returning `None`,
+//! so the dedicated conformance CI job (which installs miniconda) fails
+//! loudly on a broken/missing conda install instead of silently skipping
+//! every conda-oracle case.
+//!
 //! ## Expected internal representation (conda only, `valid/` only)
 //!
 //! Accept/reject alone doesn't confirm a checker parsed a fixture's
@@ -260,8 +272,35 @@ fn probe_conda_python() -> Option<PathBuf> {
 /// concurrently.
 static CONDA_PYTHON: OnceLock<Option<PathBuf>> = OnceLock::new();
 
+/// True when running under a CI runner (GitHub Actions, and most other
+/// CI providers, export `CI=true` into every job's environment
+/// automatically -- no workflow-specific config needed on our end).
+fn is_ci() -> bool {
+    matches!(env::var("CI"), Ok(v) if v == "1" || v.eq_ignore_ascii_case("true"))
+}
+
+/// Wraps the cached [`probe_conda_python`] result, additionally
+/// panicking (instead of quietly returning `None`) when no
+/// conda-capable python was found *and* `CI=true` -- so a CI run that's
+/// supposed to have a real conda oracle (see the `conformance` job in
+/// `.github/workflows/ci.yml`, which installs miniconda via
+/// `conda-incubator/setup-miniconda`) fails loudly on a broken/missing
+/// install instead of every conda-oracle case silently reporting
+/// `CheckOutcome::Skipped`. Outside CI (plain local dev use, e.g. `make
+/// conformance-conda` without conda installed), a missing conda oracle
+/// is still just a skip, same as before.
 fn find_conda_python() -> Option<PathBuf> {
-    CONDA_PYTHON.get_or_init(probe_conda_python).clone()
+    let found = CONDA_PYTHON.get_or_init(probe_conda_python).clone();
+    if found.is_none() && is_ci() {
+        panic!(
+            "no python interpreter with `conda` importable was found, but CI=true -- the \
+             conda oracle is required in CI, not an optional skip (checked \
+             $ALLEZ_CONFORMANCE_PYTHON, `python3` on PATH, and the interpreter shipped \
+             alongside `conda` on PATH). If this is the conformance CI job, check that the \
+             miniconda setup step ran and put `conda`/`python3` on PATH before this step."
+        );
+    }
+    found
 }
 
 fn check_conda(value: &Value) -> CheckOutcome {
@@ -341,10 +380,13 @@ fn condarc_expected_script_path() -> PathBuf {
 
 /// The checked-in expected-representation fixture for `fixture_path`
 /// (e.g. `conformance/condarc/valid/foo.json` ->
-/// `conformance/condarc/expected/foo.json`), if one exists. `None` for
-/// fixtures the generator itself skips (currently just fixtures whose
-/// JSON root isn't an object, e.g. `null_root.json` -- see
-/// `has_no_keys_to_resolve` in that script).
+/// `conformance/condarc/expected/foo.json`), if one exists. `None`
+/// either because the generator itself intentionally skips this fixture
+/// (JSON root isn't an object, e.g. `null_root.json` -- see
+/// `has_no_keys_to_resolve` in that script) or because `expected/`
+/// simply hasn't been (re)generated for it yet -- callers must tell
+/// those two cases apart themselves (see
+/// `assert_conda_expected_representation`).
 fn condarc_expected_fixture_path(fixture_path: &Path) -> Option<PathBuf> {
     let name = fixture_path.file_name()?;
     let candidate = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -361,13 +403,42 @@ fn condarc_expected_fixture_path(fixture_path: &Path) -> Option<PathBuf> {
 /// fixture; callers must gate on that themselves (see
 /// `valid_condarc_is_accepted`), since there's no expected value to
 /// compare against a rejection.
-fn assert_conda_expected_representation(fixture_path: &Path) {
+/// Asserts that conda's *live* internal representation of `fixture_path`
+/// -- recomputed right now, via the same oracle `check_conda` just used
+/// to accept it -- still matches the checked-in
+/// `conformance/condarc/expected/<name>.json`. Only meaningful once
+/// `check_conda` has already returned [`CheckOutcome::Valid`] for this
+/// fixture; callers must gate on that themselves (see
+/// `valid_condarc_is_accepted`), since there's no expected value to
+/// compare against a rejection.
+///
+/// `value` is this same fixture's already-loaded JSON, used solely to
+/// tell apart the two reasons `condarc_expected_fixture_path` can come
+/// back empty: a non-object root (e.g. `null_root.json`) is a
+/// legitimate, permanent skip -- `generate_zzz_condarc_expected_fixtures.py`
+/// has no keys to resolve for those and will never produce a file for
+/// them. An object root with no `expected/` file, on the other hand,
+/// means someone added (or renamed) a `valid/` fixture without running
+/// `make regenerate-condarc-fixtures` -- that's a real gap, so it fails
+/// the test instead of silently skipping it.
+fn assert_conda_expected_representation(fixture_path: &Path, value: &Value) {
     let Some(expected_path) = condarc_expected_fixture_path(fixture_path) else {
+        assert!(
+            !value.is_object(),
+            "[Conda expected] {} -- no conformance/condarc/expected/{} fixture exists, but \
+             this fixture's JSON root is an object, so one should. This usually means a \
+             `valid/` fixture was added or renamed without running `make \
+             regenerate-condarc-fixtures` -- run that and commit the resulting expected/ file.",
+            fixture_path.display(),
+            fixture_path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        );
         println!(
-            "SKIPPED [Conda expected] {}: no conformance/condarc/expected/ fixture for this \
-             one (its JSON root isn't an object, or the expected/ battery hasn't been \
-             regenerated since this fixture was added -- see \
-             scripts/generate_zzz_condarc_expected_fixtures.py)",
+            "SKIPPED [Conda expected] {}: fixture's JSON root isn't an object, so \
+             scripts/generate_zzz_condarc_expected_fixtures.py intentionally has no \
+             conformance/condarc/expected/ file for it (nothing to resolve keys for)",
             fixture_path.display(),
         );
         return;
@@ -658,7 +729,7 @@ fn valid_condarc_is_accepted(
     // Only conda has this today, and only once it has actually accepted
     // the fixture (nothing to compare a rejection against).
     if checker == Checker::Conda && was_valid {
-        assert_conda_expected_representation(&path);
+        assert_conda_expected_representation(&path, &value);
     }
 }
 

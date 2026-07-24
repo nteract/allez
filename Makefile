@@ -1,9 +1,10 @@
 .PHONY: help test conformance conformance-conda conformance-crate conformance-openapi regenerate-condarc-fixtures
 
-CONFORMANCE_TEST := cargo test --test condarc_conformance
+CONFORMANCE_TEST := cargo test --test condarc_conformance --features conformance-tests
 CONFORMANCE_TEST_FILE := tests/condarc_conformance.rs
 CONFORMANCE_VALID_DIR := conformance/condarc/valid
 CONFORMANCE_INVALID_DIR := conformance/condarc/invalid
+CONFORMANCE_EXPECTED_DIR := conformance/condarc/expected
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | sort | awk -F ':.*## ' '{printf "%-24s %s\n", $$1, $$2}'
@@ -35,7 +36,7 @@ conformance-openapi: ## Run only the openapi-schema condarc conformance checks (
 	ALLEZ_CONFORMANCE_SKIP_CONDA=1 ALLEZ_CONFORMANCE_SKIP_CRATE=1 $(CONFORMANCE_TEST) -- --nocapture
 
 regenerate-condarc-fixtures: ## Delete every condarc fixture (and conformance/condarc/expected/*.json) and rerun all scripts/generate_*.py against a real conda oracle (every fixture, including former hand-authored root-shape ones, is now owned by a generator -- see generate_root_shape_condarc_fixtures.py; conformance/condarc/expected/ is regenerated last, by generate_zzz_condarc_expected_fixtures.py -- see that script for why it must sort last in this loop)
-	find $(CONFORMANCE_VALID_DIR) $(CONFORMANCE_INVALID_DIR) -maxdepth 1 -name '*.json' -delete
+	find $(CONFORMANCE_VALID_DIR) $(CONFORMANCE_INVALID_DIR) $(CONFORMANCE_EXPECTED_DIR) -maxdepth 1 -name '*.json' -delete
 	@for script in scripts/generate_*.py; do \
 		echo "=== $$script ==="; \
 		python3 "$$script" || exit 1; \

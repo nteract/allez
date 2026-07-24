@@ -1,0 +1,11 @@
+{
+  "channel_settings": [
+    {
+      "channel": "x",
+      "extra": [
+        1,
+        2
+      ]
+    }
+  ]
+}

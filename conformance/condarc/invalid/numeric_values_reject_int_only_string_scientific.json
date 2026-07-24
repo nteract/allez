@@ -1,0 +1,13 @@
+{
+  "repodata_threads": "1e3",
+  "fetch_threads": "1e3",
+  "default_threads": "1e3",
+  "remote_max_retries": "1e3",
+  "remote_backoff_factor": "1e3",
+  "verify_threads": "1e3",
+  "execute_threads": "1e3",
+  "auto_stack": "1e3",
+  "verbosity": "1e3",
+  "unsatisfiable_hints_check_depth": "1e3",
+  "number_channel_notices": "1e3"
+}

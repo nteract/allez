@@ -1,0 +1,13 @@
+{
+  "repodata_threads": "3.5",
+  "fetch_threads": "3.5",
+  "default_threads": "3.5",
+  "remote_max_retries": "3.5",
+  "remote_backoff_factor": "3.5",
+  "verify_threads": "3.5",
+  "execute_threads": "3.5",
+  "auto_stack": "3.5",
+  "verbosity": "3.5",
+  "unsatisfiable_hints_check_depth": "3.5",
+  "number_channel_notices": "3.5"
+}

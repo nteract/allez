@@ -1,0 +1,4 @@
+{
+  "client_cert": "/tmp/cert.pem",
+  "client_cert_key": "/tmp/cert-key.pem"
+}

@@ -1,0 +1,128 @@
+{
+  "override_channels_enabled": {
+    "a": 1
+  },
+  "add_anaconda_token": {
+    "a": 1
+  },
+  "allow_non_channel_urls": {
+    "a": 1
+  },
+  "no_lock": {
+    "a": 1
+  },
+  "repodata_use_zst": {
+    "a": 1
+  },
+  "repodata_use_shards": {
+    "a": 1
+  },
+  "offline": {
+    "a": 1
+  },
+  "auto_update_conda": {
+    "a": 1
+  },
+  "force_reinstall": {
+    "a": 1
+  },
+  "prefix_data_interoperability": {
+    "a": 1
+  },
+  "allow_softlinks": {
+    "a": 1
+  },
+  "always_copy": {
+    "a": 1
+  },
+  "always_softlink": {
+    "a": 1
+  },
+  "rollback_enabled": {
+    "a": 1
+  },
+  "extra_safety_checks": {
+    "a": 1
+  },
+  "shortcuts": {
+    "a": 1
+  },
+  "non_admin_enabled": {
+    "a": 1
+  },
+  "separate_format_cache": {
+    "a": 1
+  },
+  "auto_activate_base": {
+    "a": 1
+  },
+  "changeps1": {
+    "a": 1
+  },
+  "json": {
+    "a": 1
+  },
+  "notify_outdated_conda": {
+    "a": 1
+  },
+  "quiet": {
+    "a": 1
+  },
+  "unsatisfiable_hints": {
+    "a": 1
+  },
+  "envvars_force_uppercase": {
+    "a": 1
+  },
+  "allow_cycles": {
+    "a": 1
+  },
+  "allow_conda_downgrades": {
+    "a": 1
+  },
+  "add_pip_as_python_dependency": {
+    "a": 1
+  },
+  "debug": {
+    "a": 1
+  },
+  "trace": {
+    "a": 1
+  },
+  "dev": {
+    "a": 1
+  },
+  "enable_private_envs": {
+    "a": 1
+  },
+  "force_32bit": {
+    "a": 1
+  },
+  "solver_ignore_timestamps": {
+    "a": 1
+  },
+  "register_envs": {
+    "a": 1
+  },
+  "protect_frozen_envs": {
+    "a": 1
+  },
+  "no_plugins": {
+    "a": 1
+  },
+  "use_only_tar_bz2": {
+    "a": 1
+  },
+  "always_yes": {
+    "a": 1
+  },
+  "report_errors": {
+    "a": 1
+  },
+  "show_channel_urls": {
+    "a": 1
+  },
+  "ssl_verify": {
+    "a": 1
+  }
+}

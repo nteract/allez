@@ -1,0 +1,8 @@
+{
+  "custom_channels": {
+    "pkgs/pro": "https://repo.anaconda.com"
+  },
+  "migrated_custom_channels": {},
+  "override_virtual_packages": {},
+  "proxy_servers": {}
+}

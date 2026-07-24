@@ -11,7 +11,27 @@ serde_json = "1.0.151"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["fmt", "json", "env-filter"] }
 
+# Gates the `condarc_conformance` integration test (see the `[[test]]` entry
+# below). It's off by default so a plain `cargo test --all` -- the normal
+# local developer/unit-test workflow -- never even compiles or runs it: the
+# conformance suite shells out to a real conda oracle and is comparatively
+# slow, so it's treated like a separate integration-test tier rather than a
+# unit test. Enable it explicitly with `--features conformance-tests` (the
+# `make conformance*` targets and the CI conformance job both do this).
+[features]
+conformance-tests = []
+
+# Explicit target so `required-features` can gate it; cargo's test
+# autodiscovery still picks up every other file under tests/ (e.g.
+# cli_scaffold.rs) normally.
+[[test]]
+name = "condarc_conformance"
+path = "tests/condarc_conformance.rs"
+required-features = ["conformance-tests"]
+
 [dev-dependencies]
 assert_cmd = "2.2.2"
+jsonschema = { version = "0.48.5", default-features = false }
 predicates = "3.1.4"
 rstest = "0.26.1"
+tempfile = "3.14.0"

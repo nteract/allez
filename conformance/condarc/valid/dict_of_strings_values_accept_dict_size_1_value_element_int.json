@@ -1,0 +1,14 @@
+{
+  "custom_channels": {
+    "k": 5
+  },
+  "migrated_custom_channels": {
+    "k": 5
+  },
+  "override_virtual_packages": {
+    "k": 5
+  },
+  "proxy_servers": {
+    "k": 5
+  }
+}

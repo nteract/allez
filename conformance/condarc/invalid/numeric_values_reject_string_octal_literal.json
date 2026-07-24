@@ -1,0 +1,15 @@
+{
+  "repodata_threads": "0o17",
+  "fetch_threads": "0o17",
+  "default_threads": "0o17",
+  "remote_max_retries": "0o17",
+  "remote_backoff_factor": "0o17",
+  "verify_threads": "0o17",
+  "execute_threads": "0o17",
+  "auto_stack": "0o17",
+  "verbosity": "0o17",
+  "unsatisfiable_hints_check_depth": "0o17",
+  "number_channel_notices": "0o17",
+  "remote_connect_timeout_secs": "0o17",
+  "remote_read_timeout_secs": "0o17"
+}

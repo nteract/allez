@@ -1,0 +1,20 @@
+{
+  "channels": 5.5,
+  "default_channels": 5.5,
+  "allowlist_channels": 5.5,
+  "denylist_channels": 5.5,
+  "migrated_channel_aliases": 5.5,
+  "repodata_fns": 5.5,
+  "experimental": 5.5,
+  "envs_dirs": 5.5,
+  "pkgs_dirs": 5.5,
+  "preview": 5.5,
+  "aggressive_update_packages": 5.5,
+  "create_default_packages": 5.5,
+  "disallowed_packages": 5.5,
+  "pinned_packages": 5.5,
+  "track_features": 5.5,
+  "shortcuts_only": 5.5,
+  "export_platforms": 5.5,
+  "subdirs": 5.5
+}

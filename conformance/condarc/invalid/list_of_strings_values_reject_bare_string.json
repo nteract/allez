@@ -1,0 +1,20 @@
+{
+  "channels": "just-a-string",
+  "default_channels": "just-a-string",
+  "allowlist_channels": "just-a-string",
+  "denylist_channels": "just-a-string",
+  "migrated_channel_aliases": "just-a-string",
+  "repodata_fns": "just-a-string",
+  "experimental": "just-a-string",
+  "envs_dirs": "just-a-string",
+  "pkgs_dirs": "just-a-string",
+  "preview": "just-a-string",
+  "aggressive_update_packages": "just-a-string",
+  "create_default_packages": "just-a-string",
+  "disallowed_packages": "just-a-string",
+  "pinned_packages": "just-a-string",
+  "track_features": "just-a-string",
+  "shortcuts_only": "just-a-string",
+  "export_platforms": "just-a-string",
+  "subdirs": "just-a-string"
+}

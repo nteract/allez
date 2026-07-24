@@ -1,0 +1,4 @@
+{
+  "ssl_verify": true,
+  "verify_ssl": true
+}

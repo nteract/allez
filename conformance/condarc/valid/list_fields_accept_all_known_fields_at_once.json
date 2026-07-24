@@ -1,0 +1,29 @@
+{
+  "list_fields": [
+    "arch",
+    "build",
+    "build_number",
+    "channel",
+    "channel_name",
+    "constrains",
+    "depends",
+    "dist_str",
+    "features",
+    "fn",
+    "license",
+    "license_family",
+    "md5",
+    "name",
+    "noarch",
+    "package_type",
+    "requested_spec",
+    "requested_specs",
+    "sha256",
+    "size",
+    "subdir",
+    "timestamp",
+    "track_features",
+    "url",
+    "version"
+  ]
+}

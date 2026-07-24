@@ -1,0 +1,6 @@
+{
+  "use_only_tar_bz2": "~",
+  "always_yes": "~",
+  "report_errors": "~",
+  "show_channel_urls": "~"
+}

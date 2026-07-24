@@ -1,0 +1,8 @@
+{
+  "channel_settings": [
+    {
+      "auth": "another-auth-handler",
+      "channel": "https://some.base-url-prefix/*"
+    }
+  ]
+}

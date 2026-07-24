@@ -1,0 +1,8 @@
+{
+  "disallowed_packages": [
+    "numpy"
+  ],
+  "disallow": [
+    "numpy"
+  ]
+}

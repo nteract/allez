@@ -1,0 +1,15 @@
+{
+  "repodata_threads": false,
+  "fetch_threads": false,
+  "default_threads": false,
+  "remote_max_retries": false,
+  "remote_backoff_factor": false,
+  "verify_threads": false,
+  "execute_threads": false,
+  "auto_stack": false,
+  "verbosity": false,
+  "unsatisfiable_hints_check_depth": false,
+  "number_channel_notices": false,
+  "remote_connect_timeout_secs": false,
+  "remote_read_timeout_secs": false
+}

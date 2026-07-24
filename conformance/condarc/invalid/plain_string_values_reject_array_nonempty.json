@@ -1,0 +1,34 @@
+{
+  "console": [
+    1,
+    2
+  ],
+  "default_activation_env": [
+    1,
+    2
+  ],
+  "env_prompt": [
+    1,
+    2
+  ],
+  "error_upload_url": [
+    1,
+    2
+  ],
+  "root_prefix": [
+    1,
+    2
+  ],
+  "solver": [
+    1,
+    2
+  ],
+  "subdir": [
+    1,
+    2
+  ],
+  "target_prefix_override": [
+    1,
+    2
+  ]
+}

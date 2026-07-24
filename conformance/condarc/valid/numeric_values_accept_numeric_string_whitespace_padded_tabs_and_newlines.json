@@ -1,0 +1,15 @@
+{
+  "repodata_threads": "\t\n42\n\t",
+  "fetch_threads": "\t\n42\n\t",
+  "default_threads": "\t\n42\n\t",
+  "remote_max_retries": "\t\n42\n\t",
+  "remote_backoff_factor": "\t\n42\n\t",
+  "verify_threads": "\t\n42\n\t",
+  "execute_threads": "\t\n42\n\t",
+  "auto_stack": "\t\n42\n\t",
+  "verbosity": "\t\n42\n\t",
+  "unsatisfiable_hints_check_depth": "\t\n42\n\t",
+  "number_channel_notices": "\t\n42\n\t",
+  "remote_connect_timeout_secs": "\t\n42\n\t",
+  "remote_read_timeout_secs": "\t\n42\n\t"
+}

@@ -13,3 +13,9 @@ mod error;
 mod model;
 mod parse;
 mod validate;
+
+pub use error::{ErrorEntry, ErrorKind, InputRepr, Location, PathSegment, ValidationReport};
+pub use model::{
+    BoolOrInt, ChannelPriority, ChannelSetting, Config, ListField, ParseOptions, PathConflict,
+    SafetyChecks, SatSolver, SslVerify,
+};

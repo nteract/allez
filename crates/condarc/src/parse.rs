@@ -201,6 +201,96 @@ fn coerce_value(kind: ValueKind, raw: &RawValue) -> Result<Coerced, CoercionErro
     }
 }
 
+/// Conda's own class-level default for a `SequenceParameter`- or `MapParameter`-typed setting,
+/// used only by [`apply_null_sequence_map_default`] when
+/// [`ParseOptions::null_sequence_map_defaults`] is enabled and the setting's raw value in the
+/// document was an explicit YAML `null` (see that option's doc comment, and
+/// docs/condarc_research.md item 22, for the full rationale). Returns `None` for every
+/// `ValueKind` this option doesn't apply to, so the caller can use this as a single combined
+/// "does this option even apply to this setting kind" + "what's the default" lookup.
+///
+/// Every default here is empty except the five documented non-empty ones (`default_channels`,
+/// `repodata_fns`, `aggressive_update_packages`, `custom_channels`, `list_fields`) — see
+/// data-model.md §4 / docs/condarc_research.md §4 for each setting's conda-documented default.
+/// `default_channels`'s default is genuinely platform-dependent in conda itself (`on_win` adds a
+/// third `msys2` URL) — mirrored here via `cfg!(windows)`, the same distinction conda's own
+/// `DEFAULT_CHANNELS_WIN`/`DEFAULT_CHANNELS_UNIX` split makes.
+fn conda_sequence_map_default(canonical: &str, kind: ValueKind) -> Option<Coerced> {
+    match kind {
+        ValueKind::StringSeq => Some(Coerced::StringSeq(Some(match canonical {
+            "default_channels" => default_channels_default(),
+            "repodata_fns" => vec![
+                "current_repodata.json".to_string(),
+                "repodata.json".to_string(),
+            ],
+            "aggressive_update_packages" => vec![
+                "ca-certificates".to_string(),
+                "certifi".to_string(),
+                "openssl".to_string(),
+            ],
+            _ => Vec::new(),
+        }))),
+        ValueKind::ListFieldsSeq => Some(Coerced::ListFieldsSeq(Some(vec![
+            crate::model::ListField::Name,
+            crate::model::ListField::Version,
+            crate::model::ListField::Build,
+            crate::model::ListField::ChannelName,
+        ]))),
+        ValueKind::StringMap => Some(Coerced::StringMap(Some(match canonical {
+            "custom_channels" => std::collections::BTreeMap::from([(
+                "pkgs/pro".to_string(),
+                "https://repo.anaconda.com".to_string(),
+            )]),
+            _ => std::collections::BTreeMap::new(),
+        }))),
+        ValueKind::NullableStringMap => Some(Coerced::NullableStringMap(Some(
+            std::collections::BTreeMap::new(),
+        ))),
+        ValueKind::StringSeqMap => Some(Coerced::StringSeqMap(Some(
+            std::collections::BTreeMap::new(),
+        ))),
+        ValueKind::ChannelSettingsSeq => Some(Coerced::ChannelSettingsSeq(Some(Vec::new()))),
+        _ => None,
+    }
+}
+
+/// `DEFAULT_CHANNELS` (conda's own `on_win`-dependent constant) — see
+/// [`conda_sequence_map_default`]'s doc comment.
+fn default_channels_default() -> Vec<String> {
+    let mut channels = vec![
+        "https://repo.anaconda.com/pkgs/main".to_string(),
+        "https://repo.anaconda.com/pkgs/r".to_string(),
+    ];
+    if cfg!(windows) {
+        channels.push("https://repo.anaconda.com/pkgs/msys2".to_string());
+    }
+    channels
+}
+
+/// If [`ParseOptions::null_sequence_map_defaults`] is enabled and `raw` is an explicit YAML
+/// `null`, replaces `coerced` with conda's own class-level default for `canonical`/`kind` (see
+/// [`conda_sequence_map_default`]); otherwise returns `coerced` unchanged. Only ever called
+/// after a successful [`coerce_value`] — every `Coerced::*Seq`/`*Map` variant that coercion
+/// produces for a `RawValue::Null` input already carries `None` (sequences.rs's "null means
+/// unset" rule), so this only ever *replaces* a `None`, never overwrites a value the document
+/// actually set.
+fn apply_null_sequence_map_default(
+    coerced: Coerced,
+    canonical: &str,
+    kind: ValueKind,
+    raw: &RawValue,
+    options: &ParseOptions,
+) -> Coerced {
+    if options.null_sequence_map_defaults
+        && matches!(raw, RawValue::Null)
+        && let Some(default) = conda_sequence_map_default(canonical, kind)
+    {
+        default
+    } else {
+        coerced
+    }
+}
+
 /// Set the one [`Config`] field `canonical` names to the value `coerced` carries (FR-009/010/011).
 /// The `(canonical, variant)` pairing here must agree with `catalog.rs`'s `CATALOG` table; a
 /// mismatch is a coding bug in this crate, not a possible user input, hence `unreachable!`.
@@ -463,6 +553,13 @@ pub(crate) fn parse_map(
         let raw = &map[matched_key];
         match coerce_value(setting.kind, raw) {
             Ok(coerced) => {
+                let coerced = apply_null_sequence_map_default(
+                    coerced,
+                    setting.canonical,
+                    setting.kind,
+                    raw,
+                    options,
+                );
                 if let Some(validator) = setting.validator
                     && let Some(entry) =
                         semantic_validation_entry(validator, &coerced, matched_key, options)

@@ -51,7 +51,7 @@ pub fn parse_with_options(yaml: &str, options: ParseOptions) -> Result<Config, V
 | Type | Kind | Contract |
 |---|---|---|
 | `Config` | struct, `#[non_exhaustive]` | One `Option<_>` (or `Option<Option<_>>` for nullable settings) field per recognized setting, canonical-named (conda's loader name — e.g. `auto_activate`, not `auto_activate_base`) — full field list in `data-model.md` §2.1. Absent = `None`, uniformly, with no defaulting layer of any kind (FR-038). Plus `extra: HashMap<String, serde_json::Value>` for retained unknown keys (research R2) and the `extra_as::<T>()` method. All fields are `pub`. |
-| `ParseOptions` | struct, `#[non_exhaustive]`, `Default` | `ssl_verify_fs_check: bool` (default `false` = no filesystem access, `ssl_verify` paths accepted unverified) — see `data-model.md` §6. |
+| `ParseOptions` | struct, `#[non_exhaustive]`, `Default` | `ssl_verify_fs_check: bool` (default `false` = no filesystem access, `ssl_verify` paths accepted unverified) and `null_sequence_map_defaults: bool` (default `false` = an explicit `null` on a sequence-/map-typed setting is treated as absent, no conda default backfilled; `true` resolves it to conda's own class-level default, Assumption A7) — see `data-model.md` §6. |
 | `ValidationReport` | struct | Owns the accumulated entries; `impl std::error::Error + Display + Serialize`. `entries()` returns `&[ErrorEntry]` (FR-037). |
 | `ErrorEntry` | struct | Public fields `location`, `kind`, `message`, `input`, `involved` (FR-033/037). `Serialize`. |
 | `ErrorKind` | enum, `#[non_exhaustive]` | Stable serde strings (see `error-report.schema.json`). Consumers branch on this (FR-037). |
@@ -194,6 +194,25 @@ fn parse_for_test(yaml: &str) -> Result<condarc::Config, condarc::ValidationRepo
 }
 ```
 
+### 4b. Opting into conda's own default for an explicit `null` sequence/map setting (Assumption A7)
+
+```rust
+// Default (`ParseOptions::default()` / plain `parse`): an explicit `null` for a
+// SequenceParameter-/MapParameter-typed setting (`channels`, `custom_channels`, ...) is
+// indistinguishable from that key being entirely absent -- both read back as `None`, per FR-038.
+let cfg = condarc::parse("custom_channels: null\nchannels: null\n")?;
+assert_eq!(cfg.custom_channels, None);
+assert_eq!(cfg.channels, None);
+
+// Opt-in: resolves to conda's own class-level default instead -- non-empty for
+// `custom_channels` (DEFAULT_CUSTOM_CHANNELS), empty for `channels`. Absent keys are still
+// always `None` regardless of this option; only an *explicit* `null` is affected.
+let options = condarc::ParseOptions::default().with_null_sequence_map_defaults(true);
+let cfg = condarc::parse_with_options("custom_channels: null\nchannels: null\n", options)?;
+assert_eq!(cfg.channels, Some(Vec::new()));
+# Ok::<(), condarc::ValidationReport>(())
+```
+
 ### 5. Interpreting settings the crate doesn't model — the caller's own config struct (research R2)
 
 `condarc`'s catalog is fixed to the ~99 settings in `data-model.md` §2.1; conda-build's four keys
@@ -263,7 +282,10 @@ shape — they consume typed `Config` fields directly (§ "Using the typed value
    non-accumulable single-entry classes `YamlSyntax`/`RootShape` (FR-030/031/032).
 4. **Absent means absent**: no defaults table, no effective-value layer, and no synthesized `false`
    for off-state booleans; a field is `None` iff the setting was not present in the document
-   (FR-038). Callers apply their own default policy explicitly (§3 above).
+   (FR-038). Callers apply their own default policy explicitly (§3 above). The sole exception is
+   the opt-in `ParseOptions.null_sequence_map_defaults` (§4b, Assumption A7): even when enabled,
+   an absent key is still always `None` — only an *explicit* `null` on a sequence-/map-typed
+   setting resolves to conda's own default instead.
 5. **Silent unknowns**: unknown top-level keys never cause an error (FR-036); they are retained in
    `Config::extra: HashMap<String, serde_json::Value>` — a neutral, parser-independent type — for
    inspection or `extra_as::<T>()` deserialization (research R2).

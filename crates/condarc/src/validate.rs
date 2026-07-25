@@ -317,6 +317,7 @@ mod tests {
     fn ssl_verify_opt_in_check_rejects_a_nonexistent_path() {
         let options = ParseOptions {
             ssl_verify_fs_check: true,
+            null_sequence_map_defaults: false,
         };
         assert!(
             ssl_verify_error(
@@ -331,6 +332,7 @@ mod tests {
     fn ssl_verify_opt_in_check_accepts_an_existing_path() {
         let options = ParseOptions {
             ssl_verify_fs_check: true,
+            null_sequence_map_defaults: false,
         };
         assert_eq!(
             ssl_verify_error(&SslVerify::Path(".".to_string()), &options),
@@ -342,6 +344,7 @@ mod tests {
     fn ssl_verify_opt_in_check_never_touches_bool_or_truststore_variants() {
         let options = ParseOptions {
             ssl_verify_fs_check: true,
+            null_sequence_map_defaults: false,
         };
         assert_eq!(ssl_verify_error(&SslVerify::Bool(true), &options), None);
         assert_eq!(ssl_verify_error(&SslVerify::Truststore, &options), None);

@@ -258,6 +258,17 @@ REJECT: list[tuple[str, object]] = [
     ("element_nested_dict_nonempty", {"mc": [{"a": 1}]}),
     # One character past the YAML simple-key length boundary -- see
     # finding 3. Paired with the accept battery's `...boundary` fixture.
+    #
+    # Also has a crate-only mirror-image `accept_key_exceeds_yaml_simple_key_length_limit`
+    # fixture in valid/ (same 1023-character key): `yaml-rust2` (the condarc crate's YAML
+    # dependency) enforces no equivalent "simple key" length limit at all, so the crate accepts
+    # what real conda rejects here -- this fixture itself is named in
+    # tests/condarc_conformance.rs's `CRATE_SKIPPED_FIXTURES` (the `Crate` checker is skipped
+    # entirely for it, never invoked) -- see docs/condarc_research.md item 21,
+    # tests/condarc_conformance.rs's `RUST_ONLY_FIXTURES`, and this repo's
+    # generate_zzz_condarc_expected_fixtures.py's `CRATE_ONLY_YAML_KEY_LENGTH_FIXTURES` (that
+    # mirror fixture's `expected/*.json` is hand-authored, not conda-oracle-generated, since
+    # real conda has no live value to record for it).
     ("key_exceeds_yaml_simple_key_length_limit", {"k" * 1023: ["a"]}),
 ]
 
@@ -423,6 +434,31 @@ def main() -> int:
             f"\n{len(written)} fixture(s) written, {len(unexpected)} candidate(s) "
             "skipped (unexpected outcome).\n"
         )
+
+    # `key_exceeds_yaml_simple_key_length_limit` above (in `REJECT`) documents that real conda
+    # rejects a 1023-character raw key outright, one character past `ruamel.yaml`'s
+    # 1024-character "simple key" scanner limit. This crate's own YAML dependency (`yaml-rust2`)
+    # enforces no equivalent limit at all -- see docs/condarc_research.md item 21 -- so a
+    # mirror-image `accept_key_exceeds_yaml_simple_key_length_limit` fixture (identical key/value
+    # shape) exists to pin the crate's own permissive behavior on its own terms.
+    #
+    # It cannot go through `generate_battery` like every other candidate above: that helper only
+    # writes a candidate when conda's own verdict matches the battery's `expect_valid`, and conda
+    # genuinely rejects this one (that's the entire point) -- so folding it into `ACCEPT` would
+    # make `generate_battery` itself `SKIPPED`/never write it, silently reproducing the exact bug
+    # this unconditional write exists to fix (`clear_stale` deletes the previously-written file,
+    # nothing recreates it). Named in `tests/condarc_conformance.rs`'s `RUST_ONLY_FIXTURES` (the
+    # `Conda`/`OpenApi` checkers are skipped entirely for it, before running anything -- there is
+    # no real conda verdict to self-verify against here). Its `expected/*.json` sibling is
+    # likewise hand-authored, by `generate_zzz_condarc_expected_fixtures.py`'s
+    # `CRATE_ONLY_YAML_KEY_LENGTH_FIXTURES`, not generated from a live conda read.
+    crate_only_name = (
+        "custom_multichannels_values_accept_key_exceeds_yaml_simple_key_length_limit.json"
+    )
+    crate_only_doc = {KEY: {"k" * 1023: ["a"]}}
+    (VALID_DIR / crate_only_name).write_text(json.dumps(crate_only_doc, indent=2) + "\n")
+    print(f"WROTE   {crate_only_name}  (unconditional -- crate-only fixture, no conda self-check)\n")
+    total_written += 1
 
     print(
         f"=== total: {total_written} fixture(s) written, "

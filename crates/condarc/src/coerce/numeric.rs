@@ -205,12 +205,13 @@ pub(crate) fn coerce_bool_or_int(value: &RawValue) -> Result<BoolOrInt, Coercion
     // Otherwise, fall back to plain integer parsing -- but, unlike `Int`/`Float`, **no PEP-515
     // underscore support** (`typify_str_no_hint`'s `INT` regex is `^[-+]?\d+$`, not `int()`; see
     // this function's doc comment) and still ASCII-only/no hex-oct-bin.
-    if is_ascii_only(trimmed) && let Some(i) = parse_int_literal(trimmed) {
+    if is_ascii_only(trimmed)
+        && let Some(i) = parse_int_literal(trimmed)
+    {
         return Ok(BoolOrInt::Int(i));
     }
 
     Err(CoercionError::simple(
-
         format!(
             "{raw:?} is not a valid local_repodata_ttl value (expected true/yes/on, false/no/off, or an integer)"
         ),

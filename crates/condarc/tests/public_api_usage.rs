@@ -157,6 +157,33 @@ fn parse_with_options_can_opt_into_the_ssl_verify_filesystem_check() {
     );
 }
 
+#[test]
+fn null_sequence_map_defaults_is_off_by_default_and_opt_in_matches_conda() {
+    let yaml = "custom_channels: null\nchannels: null\n";
+
+    // Default (`ParseOptions::default()`, same as plain `parse`): an explicit `null` on one of
+    // these settings is indistinguishable from the key being absent (FR-038) -- both stay
+    // `None`, with no conda default backfilled.
+    let cfg = condarc::parse(yaml).expect("explicit null is a valid value for these settings");
+    assert_eq!(cfg.custom_channels, None);
+    assert_eq!(cfg.channels, None);
+
+    // Opt-in: resolves to conda's own class-level default for each setting -- non-empty for
+    // `custom_channels` (`DEFAULT_CUSTOM_CHANNELS`), empty for `channels` (docs/
+    // condarc_research.md item 22).
+    let options = ParseOptions::default().with_null_sequence_map_defaults(true);
+    let cfg = condarc::parse_with_options(yaml, options)
+        .expect("explicit null is still a valid value with this option enabled");
+    assert_eq!(
+        cfg.custom_channels,
+        Some(std::collections::BTreeMap::from([(
+            "pkgs/pro".to_string(),
+            "https://repo.anaconda.com".to_string()
+        )]))
+    );
+    assert_eq!(cfg.channels, Some(Vec::new()));
+}
+
 // ---------------------------------------------------------------------
 // 5. Interpreting settings the crate doesn't model — the caller's own
 //    config struct (research R2)

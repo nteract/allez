@@ -425,12 +425,10 @@ mod tests {
         a.insert("channel".to_string(), RawValue::Str("x".to_string()));
         let mut b = indexmap::IndexMap::new();
         b.insert("channel".to_string(), RawValue::Str("x".to_string()));
-        let result = coerce_channel_settings_seq(&RawValue::Seq(vec![
-            RawValue::Map(a),
-            RawValue::Map(b),
-        ]))
-        .unwrap()
-        .unwrap();
+        let result =
+            coerce_channel_settings_seq(&RawValue::Seq(vec![RawValue::Map(a), RawValue::Map(b)]))
+                .unwrap()
+                .unwrap();
         assert_eq!(result.len(), 1);
     }
 

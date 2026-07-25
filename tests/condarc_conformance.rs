@@ -193,6 +193,60 @@ enum CheckOutcome {
     Skipped(String),
 }
 
+// ---------------------------------------------------------------------
+// Hardcoded per-fixture checker applicability (docs/condarc_research.md item 21)
+// ---------------------------------------------------------------------
+//
+// Two fixture-name lists, checked *before* any checker runs (`Checker::check` below) rather than
+// by running every checker and then inspecting/asserting on the outcome afterward. Each list
+// says outright which checker(s) a fixture simply doesn't apply to; there is no live behavior to
+// probe for those checkers on that fixture, so none is probed.
+//
+// Both lists exist for exactly one reason: `yaml-rust2` (this crate's YAML dependency) enforces
+// no equivalent to the YAML 1.1 "simple key" 1024-character scanner limit that both real conda's
+// YAML library (`ruamel.yaml`) and `docs/condarc_openapi.json`'s schema (which deliberately
+// copies conda's limit as `propertyNames.maxLength: 1022`) enforce.
+
+/// `invalid/` fixture *file stems* for which the `Crate` checker is skipped entirely: these use
+/// a 1023-character raw key, one character past conda's/the schema's 1024-character limit, so
+/// real conda and the openapi schema both correctly reject them, but the crate's own YAML
+/// dependency has no equivalent limit and would accept them -- there's nothing to compare a
+/// non-existent crate rejection against, so the `Crate` checker simply doesn't run here. See
+/// [`RUST_ONLY_FIXTURES`] for this same gap's mirror image.
+const CRATE_SKIPPED_FIXTURES: &[&str] = &[
+    "custom_multichannels_values_reject_key_exceeds_yaml_simple_key_length_limit",
+    "dict_of_strings_values_reject_key_exceeds_yaml_simple_key_length_limit",
+];
+
+/// `valid/` fixture *file stems* for which the `Conda` and `OpenApi` checkers are both skipped
+/// entirely: these fixtures exist purely to pin the crate's own (lack of a) YAML simple-key
+/// length limit (see [`CRATE_SKIPPED_FIXTURES`]'s doc comment) using the identical
+/// 1023-character key. Real conda would reject the document outright (no live value to
+/// compare), and the openapi schema copies conda's same limit, so neither checker has a
+/// meaningful verdict to produce -- only the `Crate` checker runs normally on these, including
+/// its usual exact adapter-output comparison against a hand-authored `expected/*.json` (see
+/// `scripts/generate_zzz_condarc_expected_fixtures.py`'s `CRATE_ONLY_YAML_KEY_LENGTH_FIXTURES`).
+const RUST_ONLY_FIXTURES: &[&str] = &[
+    "custom_multichannels_values_accept_key_exceeds_yaml_simple_key_length_limit",
+    "dict_of_strings_values_accept_key_exceeds_yaml_simple_key_length_limit",
+];
+
+fn fixture_stem(path: &Path) -> &str {
+    path.file_stem().and_then(|s| s.to_str()).unwrap_or("")
+}
+
+/// Whether `checker` is inapplicable to `path` per the hardcoded lists above -- checked by
+/// [`Checker::check`] *before* doing anything else, so an inapplicable checker never actually
+/// runs against that fixture at all (no conda subprocess spawned, no `condarc::parse` call, no
+/// schema validation attempted).
+fn is_fixture_skipped_for_checker(checker: Checker, path: &Path) -> bool {
+    let stem = fixture_stem(path);
+    match checker {
+        Checker::Crate => CRATE_SKIPPED_FIXTURES.contains(&stem),
+        Checker::Conda | Checker::OpenApi => RUST_ONLY_FIXTURES.contains(&stem),
+    }
+}
+
 impl Checker {
     fn skip_env_var(self) -> &'static str {
         match self {
@@ -208,9 +262,15 @@ impl Checker {
             .unwrap_or(false)
     }
 
-    fn check(self, value: &Value) -> CheckOutcome {
+    fn check(self, value: &Value, path: &Path) -> CheckOutcome {
         if self.is_force_skipped() {
             return CheckOutcome::Skipped(format!("force-skipped via {}=1", self.skip_env_var()));
+        }
+        if is_fixture_skipped_for_checker(self, path) {
+            return CheckOutcome::Skipped(
+                "not applicable to this fixture (see CRATE_SKIPPED_FIXTURES/RUST_ONLY_FIXTURES)"
+                    .to_string(),
+            );
         }
         match self {
             Checker::Conda => check_conda(value),
@@ -645,15 +705,20 @@ fn assert_conda_expected_representation(fixture_path: &Path, value: &Value) {
 
 /// Feeds `value` (re-serialized as YAML/JSON text -- JSON is valid YAML for every fixture shape
 /// this suite exercises) to the real `condarc` crate (GEN-36) via
-/// `parse_with_options(.., ssl_verify_fs_check: true)` (spec A3 -- the corpus was generated from
-/// real conda, which always performs the `ssl_verify` filesystem check), mapping `Ok`/`Err` onto
-/// [`CheckOutcome`].
+/// `parse_with_options(.., ssl_verify_fs_check: true, null_sequence_map_defaults: true)` (spec
+/// A3 for the former -- the corpus was generated from real conda, which always performs the
+/// `ssl_verify` filesystem check; docs/condarc_research.md item 22 for the latter -- real conda
+/// unconditionally resolves an explicit `null` on a `SequenceParameter`/`MapParameter`-typed
+/// setting to its own class-level default, so the corpus's `expected/*.json` records that
+/// default, not "absent"), mapping `Ok`/`Err` onto [`CheckOutcome`].
 fn check_crate(value: &Value) -> CheckOutcome {
     let yaml =
         serde_json::to_string(value).expect("fixture value should serialize to JSON (valid YAML)");
     match condarc::parse_with_options(
         &yaml,
-        condarc::ParseOptions::default().with_ssl_verify_fs_check(true),
+        condarc::ParseOptions::default()
+            .with_ssl_verify_fs_check(true)
+            .with_null_sequence_map_defaults(true),
     ) {
         Ok(_) => CheckOutcome::Valid,
         Err(report) => CheckOutcome::Invalid(report.to_string()),
@@ -701,7 +766,9 @@ fn assert_crate_expected_representation(fixture_path: &Path, value: &Value) {
         serde_json::to_string(value).expect("fixture value should serialize to JSON (valid YAML)");
     let cfg = condarc::parse_with_options(
         &yaml,
-        condarc::ParseOptions::default().with_ssl_verify_fs_check(true),
+        condarc::ParseOptions::default()
+            .with_ssl_verify_fs_check(true)
+            .with_null_sequence_map_defaults(true),
     )
     .unwrap_or_else(|err| {
         panic!(
@@ -938,7 +1005,7 @@ fn valid_condarc_is_accepted(
     #[values(Checker::Conda, Checker::Crate, Checker::OpenApi)] checker: Checker,
 ) {
     let value = load_fixture(&path);
-    let outcome = checker.check(&value);
+    let outcome = checker.check(&value, &path);
 
     // The `Crate` checker has exactly four declared A1 divergences (spec Assumptions A1):
     // fixed-width i64/f64 cannot represent these fixtures' arbitrary-precision numerals, so the
@@ -986,11 +1053,12 @@ fn invalid_condarc_is_rejected(
     #[values(Checker::Conda, Checker::Crate, Checker::OpenApi)] checker: Checker,
 ) {
     let value = load_fixture(&path);
+
     // Explode multi-key fixtures into one independent check per key
     // (see `invalid_cases`'s docs) so a checker that stops at the
     // first bad field can't hide a bug in one of the others.
     for case in invalid_cases(&path, value) {
-        let outcome = checker.check(&case.value);
+        let outcome = checker.check(&case.value, &path);
         assert_outcome_for_case(outcome, false, checker, &path, Some(&case.label));
     }
 }

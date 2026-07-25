@@ -126,6 +126,34 @@ def has_no_keys_to_resolve(doc) -> bool:
     return not isinstance(doc, dict)
 
 
+# Two `valid/` fixtures exist purely to exercise *this crate's* (lack of a) limit on
+# flow-mapping key length, not real conda's -- see docs/condarc_research.md item 21 and
+# tests/condarc_conformance.rs's `RUST_ONLY_FIXTURES`. Both use a
+# 1023-character raw key, one character past `ruamel.yaml`'s 1024-character "simple key"
+# scanner limit, so real conda genuinely raises a `ParserError` for them -- there is no live
+# conda value to record. Rather than letting `compute_expected`'s "every valid/ fixture must be
+# conda-acceptable, a failure here is a bug in this script" assumption hard-fail the entire
+# regeneration run on these two, their `expected/*.json` is hand-authored here once (verified
+# against the crate's own `tests/support::adapter::to_expected_json` output at the time these
+# fixtures were added) and short-circuits both this script's normal per-fixture conda-oracle
+# call and `--fixture` mode. `tests/condarc_conformance.rs`'s `Conda` (and `OpenApi`) checker
+# never actually calls into either code path for these two fixtures -- `Checker::check` skips
+# them unconditionally, *before* running anything, because their names are listed in that
+# module's `RUST_ONLY_FIXTURES` -- this table exists for `make
+# regenerate-condarc-fixtures` correctness (so a full regen doesn't delete-then-fail to
+# recreate these two `expected/*.json` files) and as a documented, single source of truth for
+# what the crate is expected to produce, not because any test currently reads it via the
+# `--fixture` path.
+CRATE_ONLY_YAML_KEY_LENGTH_FIXTURES: dict[str, dict] = {
+    "custom_multichannels_values_accept_key_exceeds_yaml_simple_key_length_limit": {
+        "custom_multichannels": {"k" * 1023: ["a"]},
+    },
+    "dict_of_strings_values_accept_key_exceeds_yaml_simple_key_length_limit": {
+        "custom_channels": {"k" * 1023: "val"},
+    },
+}
+
+
 # Run inside the conda-oracle interpreter. Mirrors CONDA_CHECK_SCRIPT in
 # the other generate_*.py scripts / tests/condarc_conformance.rs, plus
 # the canonicalization + shadowed-attribute logic described in this
@@ -375,6 +403,9 @@ def emit_single_fixture(python: str, fixture_path: Path) -> str:
     doc = json.loads(fixture_path.read_text())
     if has_no_keys_to_resolve(doc):
         return json.dumps({}, indent=2, sort_keys=True) + "\n"
+    hand_authored = CRATE_ONLY_YAML_KEY_LENGTH_FIXTURES.get(fixture_path.stem)
+    if hand_authored is not None:
+        return json.dumps(hand_authored, indent=2, sort_keys=True) + "\n"
     return compute_expected(python, fixture_path)
 
 
@@ -431,6 +462,14 @@ def main() -> int:
         if has_no_keys_to_resolve(doc):
             print(f"SKIPPED {fixture_path.name}  (root is not a JSON object)")
             skipped += 1
+            continue
+
+        hand_authored = CRATE_ONLY_YAML_KEY_LENGTH_FIXTURES.get(fixture_path.stem)
+        if hand_authored is not None:
+            out_path = EXPECTED_DIR / fixture_path.name
+            out_path.write_text(json.dumps(hand_authored, indent=2, sort_keys=True) + "\n")
+            written += 1
+            print(f"WROTE   {fixture_path.name}  (hand-authored -- real conda rejects this fixture, see CRATE_ONLY_YAML_KEY_LENGTH_FIXTURES)")
             continue
 
         expected_json = compute_expected(python, fixture_path)

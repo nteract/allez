@@ -34,8 +34,9 @@ cargo test --workspace --test condarc_conformance -- --nocapture
 **Expected outcome**: the `Crate` checker in `tests/condarc_conformance.rs` (previously skipped, per
 the ticket's starting state) now runs and passes for every fixture in `conformance/condarc/valid/` and
 `conformance/condarc/invalid/`, alongside the pre-existing `conda` and `openapi` checkers on the same
-fixture set (spec SC-003). The checker calls `parse_with_options(.., ssl_verify_fs_check: true)`
-(spec A3) and compares adapted output to `expected/` for **exact** equality. See `contracts/public-api.md`
+fixture set (spec SC-003). The checker calls `parse_with_options(.., ssl_verify_fs_check: true,
+null_sequence_map_defaults: true)` (spec A3, A7) and compares adapted output to `expected/` for
+**exact** equality. See `contracts/public-api.md`
 §"End-to-end usage" #1–3 for the shape of a successful `parse()` call and how to read the resulting
 typed `Config`, and `contracts/adapter-output.md` for exactly how the conformance comparison is
 performed.
@@ -90,13 +91,15 @@ cargo test --workspace -p condarc --test public_api_usage -- --nocapture
 ```
 
 **Expected outcome**: an integration test under `crates/condarc/tests/public_api_usage.rs`
-exercises, at minimum, each of the five numbered usage patterns in `contracts/public-api.md`
+exercises, at minimum, each of the six numbered usage patterns in `contracts/public-api.md`
 §"End-to-end usage": (1) `parse()` from file text with a missing-file fallback, (2) iterating
 `ValidationReport::entries()` and branching on `ErrorKind`, (3) reading a handful of typed `Config`
 fields (`channels`, `channel_priority`, `always_yes`'s tri-state), (4) `parse_with_options` with
 `ssl_verify_fs_check: true` against a fixture that points at a real, existing test-temp-dir path,
-and (5) `Config::extra_as::<T>()` against a document containing conda-build's four out-of-scope
-keys (`croot`, `bld_path`, `anaconda_upload`, `conda_build`).
+(4b) `parse_with_options` with `null_sequence_map_defaults: true` resolving an explicit `null` on a
+sequence-/map-typed setting to conda's own default (Assumption A7), and (5) `Config::extra_as::<T>()`
+against a document containing conda-build's four out-of-scope keys (`croot`, `bld_path`,
+`anaconda_upload`, `conda_build`).
 
 ## Full quality gate (pre-merge — Constitution "Quality Gates")
 
@@ -126,7 +129,7 @@ Every acceptance scenario in `spec.md` and every FR maps to at least one test:
 | FR-030..037 (error accumulation & shape) | `crates/condarc/tests/multi_error_accumulation.rs` + `contracts/error-report.schema.json` conformance |
 | FR-038 (absent settings, no defaulting) | `crates/condarc/src/model.rs` unit tests (`Config::default()` all-`None`) |
 | FR-040..042 (adapter, harness wiring) | `tests/condarc_conformance.rs` + `contracts/adapter-output.md` |
-| Assumptions A1–A4 (numeric bound + divergence list, crash-to-error, ssl_verify FS opt-in, ASCII-only digits) | `crates/condarc/src/coerce/numeric.rs`, `crates/condarc/tests/public_api_usage.rs` (Scenario 4 above), `tests/support/adapter.rs`'s divergence list |
+| Assumptions A1–A7 (numeric bound + divergence list, crash-to-error, ssl_verify FS opt-in, ASCII-only digits, YAML simple-key limit + divergence lists, null-sequence-map-defaults opt-in) | `crates/condarc/src/coerce/numeric.rs`, `crates/condarc/src/parse.rs` (`conda_sequence_map_default`), `crates/condarc/tests/public_api_usage.rs` (Scenario 4 above), `tests/support/adapter.rs`'s divergence lists |
 
 A `cargo llvm-cov` (or equivalent) coverage report generated in CI is the mechanical enforcement of
 "no decrease in test coverage percentage" (Constitution Quality Gates); this table is the

@@ -616,6 +616,20 @@ pub struct ParseOptions {
     /// runtime rule (FR-024). This is the only filesystem access the
     /// crate can ever perform, and only on explicit request.
     pub ssl_verify_fs_check: bool,
+
+    /// Opt into conda's own class-level default for an explicit `null` on a
+    /// `SequenceParameter`-/`MapParameter`-typed setting (Assumption A7).
+    ///
+    /// Default `false`: an explicit top-level `null` for one of these settings reads back
+    /// exactly like the key being absent (`None`), per FR-038's "no defaulting" posture.
+    ///
+    /// Set to `true` to instead resolve such a `null` to conda's own default value for that
+    /// setting (empty for most; non-empty for `custom_channels`, `default_channels`,
+    /// `repodata_fns`, `aggressive_update_packages`, and `list_fields`) — matching conda's own
+    /// raw-value matching, which cannot distinguish an explicit `null` from an absent key for
+    /// these setting kinds at all. An *absent* key is still always `None` regardless of this
+    /// option; only an explicit `null` is affected, and only for these setting kinds.
+    pub null_sequence_map_defaults: bool,
 }
 ```
 
@@ -630,6 +644,14 @@ conda, which always performs the check, so `ssl_verify` fixtures like `"banana"`
 `/definitely/does/not/exist/...` are rejections *because* the path does not exist, while `"."` is an
 acceptance *because* it does (spec A3). Everything else — every unit test, every hermetic caller —
 uses the default.
+
+**`null_sequence_map_defaults`, similarly:** the conformance harness's `Crate` checker also sets
+this to `true` — real conda unconditionally exhibits the "null resolves to the class default"
+behavior it encodes, so `conformance/condarc/expected/*.json`'s four affected fixtures
+(`{channel_settings,custom_multichannels,dict_of_strings,list_of_strings}_values_accept_null_
+literal_treated_as_unset.json`) record conda's default, not "absent" (docs/condarc_research.md
+item 22). Every other caller — every unit test, every hermetic caller, GEN-23's runtime path
+(which has no documented need for this specific fidelity) — uses the default (`false`).
 
 ---
 
@@ -809,3 +831,4 @@ Config ─▶ Config::extra_as::<T>() -> Result<T, serde_json::Error>   (researc
 | unknown keys accepted silently, retained in `extra` | `parse.rs`/`model.rs` | FR-036 |
 | `extra_as::<T>()` caller-participation method | `model.rs` | research R2 |
 | `ParseOptions.ssl_verify_fs_check` opt-in FS check | `model.rs`, `coerce/boolish.rs` | FR-002/024, R6 |
+| `ParseOptions.null_sequence_map_defaults` opt-in null-to-conda-default | `model.rs`, `parse.rs` | FR-038, A7 |

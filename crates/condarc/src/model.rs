@@ -337,6 +337,31 @@ pub struct ParseOptions {
     /// runtime rule (FR-024). This is the only filesystem access the
     /// crate can ever perform, and only on explicit request.
     pub ssl_verify_fs_check: bool,
+
+    /// Opt into conda's own class-level default for an explicit YAML `null` on a
+    /// `SequenceParameter`- or `MapParameter`-typed setting (`channels`, `custom_channels`,
+    /// `channel_settings`, and similar list-/dict-shaped settings — data-model.md §4 marks each
+    /// one's [`crate::catalog::ValueKind`]).
+    ///
+    /// Default `false`: an explicit top-level `null` for one of these settings is treated
+    /// identically to that key being entirely absent from the document (FR-038's "no
+    /// defaulting" posture) — the crate never maintains a conda-defaults table, so the
+    /// resulting `Config` field stays `None` either way.
+    ///
+    /// Set to `true` to instead resolve an explicit `null` for one of these settings to conda's
+    /// own default for it. This exists because conda's `SequenceParameter`/`MapParameter` raw-
+    /// value matching filters out `None`-valued matches *before* `.load()` ever sees them —
+    /// making an explicit top-level `null` genuinely indistinguishable, at that layer, from the
+    /// key never having appeared in the file at all — so conda's own class-level default (the
+    /// empty list/dict for most such settings; a documented non-empty default for
+    /// `custom_channels`, `default_channels`, `repodata_fns`, `aggressive_update_packages`, and
+    /// `list_fields`) is what conda's live `context.<setting>` actually reads back as. This is
+    /// deliberately *not* the default, and it deliberately does not apply to an absent key —
+    /// only an explicit `null` on one of these specific setting kinds resolves to conda's
+    /// default; every other setting kind, and every absent key of any kind, is completely
+    /// unaffected regardless of this option (still `None`, still FR-038). See
+    /// docs/condarc_research.md item 22.
+    pub null_sequence_map_defaults: bool,
 }
 
 impl ParseOptions {
@@ -350,6 +375,14 @@ impl ParseOptions {
     #[must_use]
     pub fn with_ssl_verify_fs_check(mut self, value: bool) -> Self {
         self.ssl_verify_fs_check = value;
+        self
+    }
+
+    /// Builder-style setter for
+    /// [`null_sequence_map_defaults`](Self::null_sequence_map_defaults).
+    #[must_use]
+    pub fn with_null_sequence_map_defaults(mut self, value: bool) -> Self {
+        self.null_sequence_map_defaults = value;
         self
     }
 }
@@ -524,7 +557,8 @@ mod tests {
         assert_eq!(
             ParseOptions::default(),
             ParseOptions {
-                ssl_verify_fs_check: false
+                ssl_verify_fs_check: false,
+                null_sequence_map_defaults: false,
             }
         );
     }

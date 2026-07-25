@@ -76,27 +76,27 @@ adapter stay at the repo root's `tests/` (unchanged path, per research R10).
 
 ### Tests for User Story 1
 
-- [ ] T017 [P] [US1] Unit tests for boolish accept-path coercion (`Bool`, `NullableBool` truth tables, whitespace-trimmed `BOOLISH_TRUE`/`BOOLISH_FALSE`) in `crates/condarc/src/coerce/boolish.rs`
-- [ ] T018 [P] [US1] Unit tests for numeric accept-path coercion (`Int`/`Float`, PEP-515 single-underscore digit groups, leading zeros, float truncation toward zero) in `crates/condarc/src/coerce/numeric.rs`
-- [ ] T019 [P] [US1] Unit tests for enum accept-path coercion (value-or-name lookup for all four enums + `channel_priority`'s bool/boolish shim) in `crates/condarc/src/coerce/enums.rs`
-- [ ] T020 [P] [US1] Unit tests for string accept-path coercion (`PlainString` `str()` conversion, `NullableString` pass-through) in `crates/condarc/src/coerce/strings.rs`
-- [ ] T021 [P] [US1] Unit tests for sequence/map accept-path coercion (all six `ValueKind` shapes: `StringSeq`, `ListFieldsSeq`, `StringMap`, `NullableStringMap`, `StringSeqMap`, `ChannelSettingsSeq`) in `crates/condarc/src/coerce/sequences.rs`
+- [X] T017 [P] [US1] Unit tests for boolish accept-path coercion (`Bool`, `NullableBool` truth tables, whitespace-trimmed `BOOLISH_TRUE`/`BOOLISH_FALSE`) in `crates/condarc/src/coerce/boolish.rs`
+- [X] T018 [P] [US1] Unit tests for numeric accept-path coercion (`Int`/`Float`, PEP-515 single-underscore digit groups, leading zeros, float truncation toward zero) in `crates/condarc/src/coerce/numeric.rs`
+- [X] T019 [P] [US1] Unit tests for enum accept-path coercion (value-or-name lookup for all four enums + `channel_priority`'s bool/boolish shim) in `crates/condarc/src/coerce/enums.rs`
+- [X] T020 [P] [US1] Unit tests for string accept-path coercion (`PlainString` `str()` conversion, `NullableString` pass-through) in `crates/condarc/src/coerce/strings.rs`
+- [X] T021 [P] [US1] Unit tests for sequence/map accept-path coercion (all six `ValueKind` shapes: `StringSeq`, `ListFieldsSeq`, `StringMap`, `NullableStringMap`, `StringSeqMap`, `ChannelSettingsSeq`) in `crates/condarc/src/coerce/sequences.rs`
 
 ### Implementation for User Story 1
 
-- [ ] T022 [P] [US1] Implement boolish accept-path coercion (`Bool`, `NullableBool`) in `crates/condarc/src/coerce/boolish.rs` (FR-012/FR-013)
-- [ ] T023 [P] [US1] Implement numeric accept-path coercion (`Int`, `Float`) in `crates/condarc/src/coerce/numeric.rs` (FR-018/FR-019)
-- [ ] T024 [US1] Implement `local_repodata_ttl`'s `BoolOrInt` narrow-vocabulary accept-path coercion in `crates/condarc/src/coerce/numeric.rs` (FR-020; depends on T023, same file)
-- [ ] T025 [P] [US1] Implement enum accept-path coercion (`ChannelPriority`/`PathConflict`/`SafetyChecks`/`SatSolver` value-or-name lookup + `channel_priority` bool/boolish shim) in `crates/condarc/src/coerce/enums.rs` (FR-016/FR-017)
-- [ ] T026 [P] [US1] Implement string accept-path coercion (`PlainString`, `NullableString`) in `crates/condarc/src/coerce/strings.rs` (FR-014/FR-015)
-- [ ] T027 [P] [US1] Implement sequence/map accept-path coercion (raw-shape gate + element typify for all six shapes) in `crates/condarc/src/coerce/sequences.rs` (FR-021/FR-022/FR-023)
-- [ ] T028 [US1] Implement `ssl_verify`'s default, side-effect-free accept-path coercion (bool/boolish/`truststore`/unverified path) in `crates/condarc/src/coerce/boolish.rs` (FR-024 default branch; depends on T022, same file)
-- [ ] T029 [US1] Implement the per-key coercion dispatch loop: for a root `Map`, look up each key in `CATALOG` (canonical or alias), call the matching coercer by `ValueKind`, and set the corresponding `Config` field on success, in `crates/condarc/src/parse.rs` (FR-009/FR-010/FR-011; depends on T008, T022–T028)
-- [ ] T030 [US1] Implement unknown top-level key retention: lower an unmatched key's `RawValue` to `serde_json::Value` and insert it into `Config::extra` in `crates/condarc/src/parse.rs` (FR-036; depends on T029)
-- [ ] T031 [US1] Implement `Config::extra_as<T: DeserializeOwned>() -> Result<T, serde_json::Error>` in `crates/condarc/src/model.rs` (research R2; depends on T009)
-- [ ] T032 [US1] Implement root-shape handling for the accepting cases (`Null` root → `Ok(Config::default())`; `Map` root → the full per-key loop) in `crates/condarc/src/parse.rs` (FR-005/FR-006; depends on T030)
-- [ ] T033 [US1] Implement the public `parse(yaml: &str)` / `parse_with_options(yaml: &str, options: ParseOptions)` entry points wiring YAML load → `lower()` → root dispatch, returning `Ok(Config)` for every accepted document, in `crates/condarc/src/lib.rs` (FR-001/FR-002; depends on T032)
-- [ ] T034 [US1] Integration test covering spec.md's US1 acceptance scenarios 1–4 (alias spellings, `"yes"`→`true`, typed `channels`/`channel_priority`/`always_yes` reads, empty/null root) in `crates/condarc/tests/parse_valid.rs`
+- [X] T022 [P] [US1] Implement boolish accept-path coercion (`Bool`, `NullableBool`) in `crates/condarc/src/coerce/boolish.rs` (FR-012/FR-013)
+- [X] T023 [P] [US1] Implement numeric accept-path coercion (`Int`, `Float`) in `crates/condarc/src/coerce/numeric.rs` (FR-018/FR-019)
+- [X] T024 [US1] Implement `local_repodata_ttl`'s `BoolOrInt` narrow-vocabulary accept-path coercion in `crates/condarc/src/coerce/numeric.rs` (FR-020; depends on T023, same file)
+- [X] T025 [P] [US1] Implement enum accept-path coercion (`ChannelPriority`/`PathConflict`/`SafetyChecks`/`SatSolver` value-or-name lookup + `channel_priority` bool/boolish shim) in `crates/condarc/src/coerce/enums.rs` (FR-016/FR-017)
+- [X] T026 [P] [US1] Implement string accept-path coercion (`PlainString`, `NullableString`) in `crates/condarc/src/coerce/strings.rs` (FR-014/FR-015)
+- [X] T027 [P] [US1] Implement sequence/map accept-path coercion (raw-shape gate + element typify for all six shapes) in `crates/condarc/src/coerce/sequences.rs` (FR-021/FR-022/FR-023)
+- [X] T028 [US1] Implement `ssl_verify`'s default, side-effect-free accept-path coercion (bool/boolish/`truststore`/unverified path) in `crates/condarc/src/coerce/boolish.rs` (FR-024 default branch; depends on T022, same file)
+- [X] T029 [US1] Implement the per-key coercion dispatch loop: for a root `Map`, look up each key in `CATALOG` (canonical or alias), call the matching coercer by `ValueKind`, and set the corresponding `Config` field on success, in `crates/condarc/src/parse.rs` (FR-009/FR-010/FR-011; depends on T008, T022–T028)
+- [X] T030 [US1] Implement unknown top-level key retention: lower an unmatched key's `RawValue` to `serde_json::Value` and insert it into `Config::extra` in `crates/condarc/src/parse.rs` (FR-036; depends on T029)
+- [X] T031 [US1] Implement `Config::extra_as<T: DeserializeOwned>() -> Result<T, serde_json::Error>` in `crates/condarc/src/model.rs` (research R2; depends on T009)
+- [X] T032 [US1] Implement root-shape handling for the accepting cases (`Null` root → `Ok(Config::default())`; `Map` root → the full per-key loop) in `crates/condarc/src/parse.rs` (FR-005/FR-006; depends on T030)
+- [X] T033 [US1] Implement the public `parse(yaml: &str)` / `parse_with_options(yaml: &str, options: ParseOptions)` entry points wiring YAML load → `lower()` → root dispatch, returning `Ok(Config)` for every accepted document, in `crates/condarc/src/lib.rs` (FR-001/FR-002; depends on T032)
+- [X] T034 [US1] Integration test covering spec.md's US1 acceptance scenarios 1–4 (alias spellings, `"yes"`→`true`, typed `channels`/`channel_priority`/`always_yes` reads, empty/null root) in `crates/condarc/tests/parse_valid.rs`
 
 **Checkpoint**: User Story 1 is functional — the crate accepts valid documents and produces correctly-typed `Config` values, independently testable via unit tests and `parse_valid.rs` (the full conformance-corpus proof against `expected/*.json` lands in US3).
 

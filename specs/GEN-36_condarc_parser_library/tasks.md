@@ -36,12 +36,12 @@ adapter stay at the repo root's `tests/` (unchanged path, per research R10).
 
 **Purpose**: Workspace restructure and crate scaffolding so `cargo build --workspace` succeeds before any behavior is implemented.
 
-- [ ] T001 Convert the repo-root manifest into a Cargo workspace: add a `[workspace]` table with `members = [".", "crates/condarc"]` to `Cargo.toml`, and add `condarc = { path = "crates/condarc" }` as a dev-dependency of the `allez` package (research R10)
-- [ ] T002 [P] Create `crates/condarc/Cargo.toml` (`name = "condarc"`, `edition = "2024"`, deps: `yaml-rust2`, `serde` with `derive`, `serde_json`, optionally `thiserror`) per plan.md's Project Structure
-- [ ] T003 Create crate skeleton so the workspace compiles: `crates/condarc/src/lib.rs`, `crates/condarc/src/parse.rs`, `crates/condarc/src/catalog.rs`, `crates/condarc/src/model.rs`, `crates/condarc/src/validate.rs`, `crates/condarc/src/error.rs`, `crates/condarc/src/coerce/mod.rs`, `crates/condarc/src/coerce/boolish.rs`, `crates/condarc/src/coerce/numeric.rs`, `crates/condarc/src/coerce/enums.rs`, `crates/condarc/src/coerce/strings.rs`, `crates/condarc/src/coerce/sequences.rs` (each an empty stub with a `mod` declaration wired from `lib.rs`)
-- [ ] T004 Add `#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]` and any other crate-level lint attributes to `crates/condarc/src/lib.rs` (Constitution V, plan.md Constraints)
+- [X] T001 Convert the repo-root manifest into a Cargo workspace: add a `[workspace]` table with `members = [".", "crates/condarc"]` to `Cargo.toml`, and add `condarc = { path = "crates/condarc" }` as a dev-dependency of the `allez` package (research R10)
+- [X] T002 [P] Create `crates/condarc/Cargo.toml` (`name = "condarc"`, `edition = "2024"`, deps: `yaml-rust2`, `serde` with `derive`, `serde_json`, optionally `thiserror`) per plan.md's Project Structure
+- [X] T003 Create crate skeleton so the workspace compiles: `crates/condarc/src/lib.rs`, `crates/condarc/src/parse.rs`, `crates/condarc/src/catalog.rs`, `crates/condarc/src/model.rs`, `crates/condarc/src/validate.rs`, `crates/condarc/src/error.rs`, `crates/condarc/src/coerce/mod.rs`, `crates/condarc/src/coerce/boolish.rs`, `crates/condarc/src/coerce/numeric.rs`, `crates/condarc/src/coerce/enums.rs`, `crates/condarc/src/coerce/strings.rs`, `crates/condarc/src/coerce/sequences.rs` (each an empty stub with a `mod` declaration wired from `lib.rs`)
+- [X] T004 Add `#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]` and any other crate-level lint attributes to `crates/condarc/src/lib.rs` (Constitution V, plan.md Constraints)
 - [ ] T005 Run `cargo deny check` and `cargo audit` against the new `yaml-rust2` dependency to confirm it clears license/advisory checks (research R1); only touch `deny.toml` if an unexpected exception surfaces
-- [ ] T006 Run `cargo build --workspace` and commit the regenerated `Cargo.lock` (Constitution IX)
+- [X] T006 Run `cargo build --workspace` and commit the regenerated `Cargo.lock` (Constitution IX)
 
 **Checkpoint**: `cargo build --workspace` succeeds with an empty, un-implemented `condarc` crate.
 

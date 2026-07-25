@@ -301,6 +301,30 @@ mod tests {
         assert_eq!(coerce_string_map(&RawValue::Null), Ok(None));
     }
 
+    #[test]
+    fn string_map_rejects_bare_scalar() {
+        assert!(coerce_string_map(&RawValue::Str("just-a-string".to_string())).is_err());
+        assert!(coerce_string_map(&RawValue::Int(7)).is_err());
+    }
+
+    #[test]
+    fn string_map_rejects_a_nonempty_sequence() {
+        assert!(coerce_string_map(&str_seq(&["a"])).is_err());
+    }
+
+    #[test]
+    fn string_map_accepts_an_empty_sequence_as_an_empty_mapping() {
+        assert_eq!(
+            coerce_string_map(&RawValue::Seq(vec![])),
+            Ok(Some(BTreeMap::new()))
+        );
+    }
+
+    #[test]
+    fn nullable_string_map_rejects_bare_scalar() {
+        assert!(coerce_nullable_string_map(&RawValue::Str("just-a-string".to_string())).is_err());
+    }
+
     // ---- StringSeqMap (custom_multichannels, FR-023) ----
 
     #[test]
@@ -312,6 +336,21 @@ mod tests {
             result.get("defaults"),
             Some(&vec!["main".to_string(), "r".to_string()])
         );
+    }
+
+    #[test]
+    fn string_seq_map_rejects_a_bare_scalar_root() {
+        assert!(coerce_string_seq_map(&RawValue::Str("nope".to_string())).is_err());
+    }
+
+    #[test]
+    fn string_seq_map_rejects_a_bare_scalar_value() {
+        let mut map = indexmap::IndexMap::new();
+        map.insert(
+            "defaults".to_string(),
+            RawValue::Str("not-a-list".to_string()),
+        );
+        assert!(coerce_string_seq_map(&RawValue::Map(map)).is_err());
     }
 
     // ---- ChannelSettingsSeq (FR-023) ----
@@ -337,5 +376,15 @@ mod tests {
             coerce_channel_settings_seq(&RawValue::Seq(vec![RawValue::Str("x".to_string())]))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn channel_settings_seq_rejects_a_null_element() {
+        assert!(coerce_channel_settings_seq(&RawValue::Seq(vec![RawValue::Null])).is_err());
+    }
+
+    #[test]
+    fn channel_settings_seq_rejects_a_bare_scalar_root() {
+        assert!(coerce_channel_settings_seq(&RawValue::Str("nope".to_string())).is_err());
     }
 }

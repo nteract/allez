@@ -8,8 +8,9 @@ use crate::parse::RawValue;
 
 /// Strip PEP-515 single-underscore digit-group separators (underscore must sit strictly between
 /// two ASCII digits; leading/trailing/doubled underscores are rejected) or return `None` if any
-/// underscore is misplaced.
-fn strip_pep515_underscores(s: &str) -> Option<String> {
+/// underscore is misplaced. `pub(crate)` so `validate.rs`'s `default_python` validator (FR-026)
+/// can reuse the same underscore rule rather than duplicating it (Constitution IV).
+pub(crate) fn strip_pep515_underscores(s: &str) -> Option<String> {
     let chars: Vec<char> = s.chars().collect();
     let mut out = String::with_capacity(chars.len());
     for (i, c) in chars.iter().enumerate() {
@@ -28,7 +29,9 @@ fn strip_pep515_underscores(s: &str) -> Option<String> {
 
 /// A4: reject any non-ASCII character up front — Rust's numeric parsers are ASCII-only and this
 /// crate deliberately does not carry a Unicode `Nd`->value table (docs/condarc_research.md A4).
-fn is_ascii_only(s: &str) -> bool {
+/// `pub(crate)` so `validate.rs`'s `default_python` validator (FR-026, A4) can reuse the same
+/// rule (Constitution IV).
+pub(crate) fn is_ascii_only(s: &str) -> bool {
     s.is_ascii()
 }
 
@@ -268,6 +271,29 @@ mod tests {
         assert!(coerce_int(&s("1__000")).is_err());
     }
 
+    #[test]
+    fn int_rejects_out_of_i64_range_numeral_string_per_a1() {
+        // Exceeds i64::MAX (~9.2e18) — A1's fixed-width numeric range bound. Rust's own
+        // `i64::from_str` fails for a numeral this large, so `coerce_int` must surface that as a
+        // typed error, not a panic or a silent wraparound.
+        assert!(coerce_int(&s("99999999999999999999999999999999")).is_err());
+        assert!(coerce_int(&s("-99999999999999999999999999999999")).is_err());
+    }
+
+    #[test]
+    fn int_rejects_out_of_range_float_value_per_a1() {
+        assert!(coerce_int(&RawValue::Float(1e30)).is_err());
+        assert!(coerce_int(&RawValue::Float(f64::INFINITY)).is_err());
+        assert!(coerce_int(&RawValue::Float(f64::NAN)).is_err());
+    }
+
+    #[test]
+    fn int_rejects_non_ascii_digit_string_per_a4() {
+        // Arabic-Indic digit three (U+0663) — Python's int()/float() accept any Unicode decimal
+        // digit, but this crate deliberately does not (A4).
+        assert!(coerce_int(&s("\u{0663}")).is_err());
+    }
+
     // ---- Float (FR-019) ----
 
     #[test]
@@ -296,6 +322,11 @@ mod tests {
     #[test]
     fn float_rejects_non_decimal_base_literals() {
         assert!(coerce_float(&s("0x1A")).is_err());
+    }
+
+    #[test]
+    fn float_rejects_non_ascii_digit_string_per_a4() {
+        assert!(coerce_float(&s("\u{0663}.\u{0669}")).is_err());
     }
 
     // ---- BoolOrInt / local_repodata_ttl (FR-020) ----
@@ -337,5 +368,24 @@ mod tests {
     #[test]
     fn bool_or_int_rejects_hex_literal_strings() {
         assert!(coerce_bool_or_int(&s("0x1A")).is_err());
+    }
+
+    #[test]
+    fn bool_or_int_rejects_out_of_range_float_per_a1() {
+        assert!(coerce_bool_or_int(&RawValue::Float(1e30)).is_err());
+        assert!(coerce_bool_or_int(&RawValue::Float(f64::INFINITY)).is_err());
+        assert!(coerce_bool_or_int(&RawValue::Float(f64::NAN)).is_err());
+    }
+
+    #[test]
+    fn bool_or_int_rejects_null_seq_and_map() {
+        assert!(coerce_bool_or_int(&RawValue::Null).is_err());
+        assert!(coerce_bool_or_int(&RawValue::Seq(vec![])).is_err());
+        assert!(coerce_bool_or_int(&RawValue::Map(indexmap::IndexMap::new())).is_err());
+    }
+
+    #[test]
+    fn bool_or_int_rejects_out_of_i64_range_numeral_string_per_a1() {
+        assert!(coerce_bool_or_int(&s("99999999999999999999999999999999")).is_err());
     }
 }

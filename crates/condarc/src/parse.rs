@@ -6,11 +6,11 @@ use std::collections::HashSet;
 use indexmap::IndexMap;
 use yaml_rust2::{Yaml, YamlLoader};
 
-use crate::catalog::{CATALOG, ValueKind};
+use crate::catalog::{CATALOG, SemanticValidator, ValueKind};
 use crate::coerce::enums::EnumResult;
 use crate::coerce::{self, CoercionError, input_repr};
 use crate::error::{ErrorEntry, ErrorKind, InputRepr, Location, ValidationReport};
-use crate::model::Config;
+use crate::model::{Config, ParseOptions};
 
 /// The internal, owned mirror of `yaml_rust2::Yaml`'s resolved-scalar-type tree (data-model.md
 /// §1). Exists so no other module depends on `yaml-rust2`'s types directly (research R1: a
@@ -45,6 +45,69 @@ pub(crate) enum RawValue {
     /// caller-facing `type_coercion` entry for that (FR-007b) is raised by the per-key dispatch
     /// loop, which has the enclosing location this function does not.
     Map(IndexMap<String, RawValue>),
+}
+
+/// Lower the document root into a [`RawValue`] tree, also collecting a `type_coercion` entry for
+/// every non-string mapping key encountered anywhere in the document (FR-007b) instead of
+/// silently dropping it as the plain [`lower`] does. A dropped key's location is the nearest
+/// enclosing top-level key name as written (or [`Location::Root`] for a root-level offender) —
+/// data-model.md §1's "located at the enclosing setting" note; this runs *before* any
+/// canonical/alias catalog lookup, so the location is the key exactly as the document spelled it.
+pub(crate) fn lower_document(yaml: &Yaml) -> (RawValue, Vec<ErrorEntry>) {
+    let mut entries = Vec::new();
+    let value = lower_tracking_dropped_keys(yaml, None, &mut entries);
+    (value, entries)
+}
+
+fn lower_tracking_dropped_keys(
+    yaml: &Yaml,
+    enclosing_setting: Option<&str>,
+    entries: &mut Vec<ErrorEntry>,
+) -> RawValue {
+    match yaml {
+        Yaml::Array(items) => RawValue::Seq(
+            items
+                .iter()
+                .map(|item| lower_tracking_dropped_keys(item, enclosing_setting, entries))
+                .collect(),
+        ),
+        Yaml::Hash(hash) => {
+            let mut map = IndexMap::with_capacity(hash.len());
+            for (key, value) in hash {
+                match key {
+                    Yaml::String(key_str) => {
+                        // The first string key we descend through becomes the "enclosing
+                        // setting" for everything nested under it; deeper non-string keys keep
+                        // attributing to that same top-level name (data-model.md §1).
+                        let nested_context = enclosing_setting.or(Some(key_str.as_str()));
+                        map.insert(
+                            key_str.clone(),
+                            lower_tracking_dropped_keys(value, nested_context, entries),
+                        );
+                    }
+                    non_string_key => {
+                        let location = match enclosing_setting {
+                            Some(setting) => Location::Setting {
+                                setting: setting.to_string(),
+                            },
+                            None => Location::Root,
+                        };
+                        entries.push(ErrorEntry {
+                            location,
+                            kind: ErrorKind::TypeCoercion,
+                            message: "mapping key is not a string and was dropped".to_string(),
+                            input: input_repr(&lower(non_string_key)),
+                            involved: Vec::new(),
+                        });
+                    }
+                }
+            }
+            RawValue::Map(map)
+        }
+        // Scalars/Null/BadValue/Alias never contain nested mapping keys, so the plain, untracked
+        // `lower` is equivalent here.
+        other => lower(other),
+    }
 }
 
 /// Lower a single `yaml_rust2::Yaml` value into [`RawValue`] via one hand-written recursive
@@ -301,16 +364,85 @@ fn build_error_entry(setting_key: &str, err: CoercionError) -> ErrorEntry {
     }
 }
 
+/// Run `setting`'s semantic validator (if any) against its just-coerced value (data-model.md §9,
+/// FR-024/025/026), producing a `semantic_validation` entry iff the value is invalid. `Coerced`
+/// stays private to this module, so the actual rule logic lives in `validate.rs`'s small, pure,
+/// per-type functions; this is just the dispatch between the two.
+fn semantic_validation_entry(
+    validator: SemanticValidator,
+    coerced: &Coerced,
+    setting_key: &str,
+    options: &ParseOptions,
+) -> Option<ErrorEntry> {
+    let (message, input) = match validator {
+        SemanticValidator::ChannelAlias => {
+            let Coerced::PlainString(s) = coerced else {
+                unreachable!("catalog/coercer mismatch: ChannelAlias validator expects PlainString")
+            };
+            (
+                crate::validate::channel_alias_error(s)?,
+                InputRepr::Str { value: s.clone() },
+            )
+        }
+        SemanticValidator::DefaultPython => {
+            let Coerced::NullableString(opt) = coerced else {
+                unreachable!(
+                    "catalog/coercer mismatch: DefaultPython validator expects NullableString"
+                )
+            };
+            let s = opt.as_ref()?;
+            (
+                crate::validate::default_python_error(s)?,
+                InputRepr::Str { value: s.clone() },
+            )
+        }
+        SemanticValidator::SslVerify => {
+            let Coerced::SslVerify(sv) = coerced else {
+                unreachable!("catalog/coercer mismatch: SslVerify validator expects SslVerify")
+            };
+            let message = crate::validate::ssl_verify_error(sv, options)?;
+            let crate::model::SslVerify::Path(path) = sv else {
+                unreachable!("ssl_verify_error only ever fails for the Path variant")
+            };
+            (
+                message,
+                InputRepr::Str {
+                    value: path.clone(),
+                },
+            )
+        }
+        // The `list_fields` closed-vocabulary check already happens inline, as a
+        // `type_coercion` error, in `coerce/sequences.rs::coerce_list_fields_seq` — there is no
+        // separate semantic pass to run here.
+        SemanticValidator::ListFields => return None,
+    };
+    Some(ErrorEntry {
+        location: Location::Setting {
+            setting: setting_key.to_string(),
+        },
+        kind: ErrorKind::SemanticValidation,
+        message,
+        input,
+        involved: Vec::new(),
+    })
+}
+
 /// The per-key coercion dispatch loop (FR-009/FR-010/FR-011): for each `CATALOG` entry (in its
 /// fixed declaration order, research R7), look up the document's raw value under the setting's
 /// canonical name or any alias, coerce it, and either set the matching `Config` field or push a
-/// `type_coercion` entry — never short-circuiting on the first failure (FR-030/031). Keys that
-/// match nothing in `CATALOG` are retained in `Config::extra` (FR-036, research R2).
+/// `type_coercion` entry — never short-circuiting on the first failure (FR-030/031). A
+/// successfully-coerced value that also has a semantic validator (FR-024/025/026) is checked
+/// immediately after coercion: an invalid value still gets written into `Config` (harmless, since
+/// any accumulated entry means the whole parse ultimately returns `Err`, so the field's value is
+/// never observed by a caller) alongside pushing its `semantic_validation` entry. Keys that match
+/// nothing in `CATALOG` are retained in `Config::extra` (FR-036, research R2).
 ///
-/// This function does not yet run `validate.rs`'s semantic validators, alias-collision
-/// detection, or the two cross-field rules — those are a separate pass layered on top of this
-/// one's output, added alongside their own implementation.
-pub(crate) fn parse_map(map: IndexMap<String, RawValue>) -> (Config, Vec<ErrorEntry>) {
+/// After the per-key pass, this also runs `validate.rs`'s alias-collision (FR-029) and
+/// cross-field (FR-027/028) passes, in the order research R7 documents.
+pub(crate) fn parse_map(
+    map: IndexMap<String, RawValue>,
+    options: &ParseOptions,
+) -> (Config, Vec<ErrorEntry>) {
     let mut cfg = Config::default();
     let mut entries = Vec::new();
     let mut consumed: HashSet<String> = HashSet::new();
@@ -330,7 +462,15 @@ pub(crate) fn parse_map(map: IndexMap<String, RawValue>) -> (Config, Vec<ErrorEn
 
         let raw = &map[matched_key];
         match coerce_value(setting.kind, raw) {
-            Ok(coerced) => apply_to_config(&mut cfg, setting.canonical, coerced),
+            Ok(coerced) => {
+                if let Some(validator) = setting.validator
+                    && let Some(entry) =
+                        semantic_validation_entry(validator, &coerced, matched_key, options)
+                {
+                    entries.push(entry);
+                }
+                apply_to_config(&mut cfg, setting.canonical, coerced);
+            }
             Err(err) => entries.push(build_error_entry(matched_key, err)),
         }
     }
@@ -341,13 +481,19 @@ pub(crate) fn parse_map(map: IndexMap<String, RawValue>) -> (Config, Vec<ErrorEn
         }
     }
 
+    entries.extend(crate::validate::alias_collision_entries(&map));
+    entries.extend(crate::validate::cross_field_entries(&cfg));
+
     (cfg, entries)
 }
 
 /// Parse the text of one `.condarc` document all the way to a [`Config`] or a
 /// [`ValidationReport`] (FR-001/002/005/006/007/008). This is what `lib.rs`'s public `parse`/
 /// `parse_with_options` delegate to.
-pub(crate) fn parse_document(yaml_text: &str) -> Result<Config, ValidationReport> {
+pub(crate) fn parse_document(
+    yaml_text: &str,
+    options: &ParseOptions,
+) -> Result<Config, ValidationReport> {
     let docs = match YamlLoader::load_from_str(yaml_text) {
         Ok(docs) => docs,
         Err(scan_err) => {
@@ -377,14 +523,23 @@ pub(crate) fn parse_document(yaml_text: &str) -> Result<Config, ValidationReport
         }
     };
 
-    match lower(&root) {
-        RawValue::Null => Ok(Config::default()),
+    let (lowered, dropped_key_entries) = lower_document(&root);
+    match lowered {
+        RawValue::Null => {
+            if dropped_key_entries.is_empty() {
+                Ok(Config::default())
+            } else {
+                Err(ValidationReport::new(dropped_key_entries))
+            }
+        }
         RawValue::Map(map) => {
-            let (cfg, entries) = parse_map(map);
-            if entries.is_empty() {
+            let (cfg, map_entries) = parse_map(map, options);
+            let mut all_entries = dropped_key_entries;
+            all_entries.extend(map_entries);
+            if all_entries.is_empty() {
                 Ok(cfg)
             } else {
-                Err(ValidationReport::new(entries))
+                Err(ValidationReport::new(all_entries))
             }
         }
         other => Err(ValidationReport::new(vec![ErrorEntry {

@@ -110,30 +110,30 @@ adapter stay at the repo root's `tests/` (unchanged path, per research R10).
 
 ### Tests for User Story 2
 
-- [ ] T035 [P] [US2] Unit tests for boolish reject-path coercion (non-boolish, non-numeric-parseable strings rejected) in `crates/condarc/src/coerce/boolish.rs`
-- [ ] T036 [P] [US2] Unit tests for numeric reject-path coercion, incl. the A1 `i64`/`f64` range check and A4 ASCII-only-digit rule, in `crates/condarc/src/coerce/numeric.rs`
-- [ ] T037 [P] [US2] Unit tests for enum reject-path coercion (wrong casing rejected) in `crates/condarc/src/coerce/enums.rs`
-- [ ] T038 [P] [US2] Unit tests for sequence/map reject-path coercion (bare-scalar rejection, `list_fields` closed-vocabulary violations) in `crates/condarc/src/coerce/sequences.rs`
-- [ ] T039 [P] [US2] Unit tests for `validate.rs`'s semantic validators (`channel_alias`, `default_python`, `ssl_verify` path existence), alias-collision detection, and the two cross-field rules in `crates/condarc/src/validate.rs`
+- [X] T035 [P] [US2] Unit tests for boolish reject-path coercion (non-boolish, non-numeric-parseable strings rejected) in `crates/condarc/src/coerce/boolish.rs`
+- [X] T036 [P] [US2] Unit tests for numeric reject-path coercion, incl. the A1 `i64`/`f64` range check and A4 ASCII-only-digit rule, in `crates/condarc/src/coerce/numeric.rs`
+- [X] T037 [P] [US2] Unit tests for enum reject-path coercion (wrong casing rejected) in `crates/condarc/src/coerce/enums.rs`
+- [X] T038 [P] [US2] Unit tests for sequence/map reject-path coercion (bare-scalar rejection, `list_fields` closed-vocabulary violations) in `crates/condarc/src/coerce/sequences.rs`
+- [X] T039 [P] [US2] Unit tests for `validate.rs`'s semantic validators (`channel_alias`, `default_python`, `ssl_verify` path existence), alias-collision detection, and the two cross-field rules in `crates/condarc/src/validate.rs`
 
 ### Implementation for User Story 2
 
-- [ ] T040 [P] [US2] Implement boolish reject-path errors (`type_coercion` entries for non-boolish/unparseable strings) in `crates/condarc/src/coerce/boolish.rs` (FR-012)
-- [ ] T041 [P] [US2] Implement numeric reject-path errors, incl. the A1 range check and A4 ASCII-only-digit enforcement, in `crates/condarc/src/coerce/numeric.rs` (FR-018/FR-019, A1, A4)
-- [ ] T042 [P] [US2] Implement enum reject-path errors (bad casing rejected) in `crates/condarc/src/coerce/enums.rs` (FR-016)
-- [ ] T043 [P] [US2] Implement sequence/map reject-path errors (bare-scalar rejection, `list_fields` vocabulary violation) in `crates/condarc/src/coerce/sequences.rs` (FR-021/FR-022/FR-023)
-- [ ] T044 [US2] Implement the `channel_alias` scheme semantic validator (`^$|^[a-z][a-z0-9]{0,11}://`) in `crates/condarc/src/validate.rs` (FR-025)
-- [ ] T045 [US2] Implement the `default_python` semantic validator (empty/null-or-falsy accepted; else `len>=3` ∧ `value[1]=='.'` ∧ whole string parses as an ASCII float in `[2.0, 4.0)`) in `crates/condarc/src/validate.rs` (FR-026, A4; depends on T044, same file)
-- [ ] T046 [US2] Implement the opt-in `ssl_verify` filesystem-existence validator in `crates/condarc/src/validate.rs` (FR-024, A3, research R6; depends on T028, T045)
-- [ ] T047 [US2] Implement alias-collision detection for all 20 documented alias pairs (`MultipleKeysError`) in `crates/condarc/src/validate.rs` (FR-029; depends on T046, same file)
-- [ ] T048 [US2] Implement the two cross-field rules — `client_ssl_cert_key` requires `client_ssl_cert`; `always_copy`/`always_softlink` mutual exclusion — in `crates/condarc/src/validate.rs` (FR-027/FR-028; depends on T047, same file)
-- [ ] T049 [US2] Implement YAML syntax error handling: a `yaml_rust2::ScanError` produces a single-entry `YamlSyntax` report with no per-field evaluation, in `crates/condarc/src/parse.rs` (FR-008, FR-032a; depends on T011)
-- [ ] T050 [US2] Implement root-shape rejection: a `Seq`/scalar root, or a multi-document stream, produces a single-entry `RootShape` report, in `crates/condarc/src/parse.rs` (FR-007, FR-007a, FR-032b; depends on T049, same file)
-- [ ] T051 [US2] Implement non-string mapping key handling: a per-key `type_coercion` entry naming the enclosing location, key dropped, evaluation continues, in `crates/condarc/src/parse.rs` (FR-007b; depends on T029)
-- [ ] T052 [US2] Wire error accumulation: the per-key loop collects `Err` entries instead of short-circuiting, then runs `validate.rs`'s semantic/alias-collision/cross-field passes, returning `Err(ValidationReport)` (non-accumulable classes first, then catalog order, then alias-collision, then cross-field per research R7) iff any entries exist, in `crates/condarc/src/parse.rs` (FR-030/FR-031; depends on T040–T048, T050, T051)
-- [ ] T053 [US2] Update `parse()`/`parse_with_options()` in `crates/condarc/src/lib.rs` to surface the accumulated `ValidationReport` as `Err(_)` (depends on T052, T033)
-- [ ] T054 [US2] Integration test `crates/condarc/tests/multi_error_accumulation.rs`: a hand-built document with a bad `channel_alias`, an out-of-range `remote_max_retries`, and a non-boolish `always_copy` yields exactly 3 entries in `report.entries()` (SC-005)
-- [ ] T055 [US2] Integration test `crates/condarc/tests/parse_invalid.rs`: single-entry `YamlSyntax`/`RootShape` reports, an alias-collision entry naming both keys, and cross-field entries (spec.md's US2 acceptance scenarios 1–5)
+- [X] T040 [P] [US2] Implement boolish reject-path errors (`type_coercion` entries for non-boolish/unparseable strings) in `crates/condarc/src/coerce/boolish.rs` (FR-012)
+- [X] T041 [P] [US2] Implement numeric reject-path errors, incl. the A1 range check and A4 ASCII-only-digit enforcement, in `crates/condarc/src/coerce/numeric.rs` (FR-018/FR-019, A1, A4)
+- [X] T042 [P] [US2] Implement enum reject-path errors (bad casing rejected) in `crates/condarc/src/coerce/enums.rs` (FR-016)
+- [X] T043 [P] [US2] Implement sequence/map reject-path errors (bare-scalar rejection, `list_fields` vocabulary violation) in `crates/condarc/src/coerce/sequences.rs` (FR-021/FR-022/FR-023)
+- [X] T044 [US2] Implement the `channel_alias` scheme semantic validator (`^$|^[a-z][a-z0-9]{0,11}://`) in `crates/condarc/src/validate.rs` (FR-025)
+- [X] T045 [US2] Implement the `default_python` semantic validator (empty/null-or-falsy accepted; else `len>=3` ∧ `value[1]=='.'` ∧ whole string parses as an ASCII float in `[2.0, 4.0)`) in `crates/condarc/src/validate.rs` (FR-026, A4; depends on T044, same file)
+- [X] T046 [US2] Implement the opt-in `ssl_verify` filesystem-existence validator in `crates/condarc/src/validate.rs` (FR-024, A3, research R6; depends on T028, T045)
+- [X] T047 [US2] Implement alias-collision detection for all 20 documented alias pairs (`MultipleKeysError`) in `crates/condarc/src/validate.rs` (FR-029; depends on T046, same file)
+- [X] T048 [US2] Implement the two cross-field rules — `client_ssl_cert_key` requires `client_ssl_cert`; `always_copy`/`always_softlink` mutual exclusion — in `crates/condarc/src/validate.rs` (FR-027/FR-028; depends on T047, same file)
+- [X] T049 [US2] Implement YAML syntax error handling: a `yaml_rust2::ScanError` produces a single-entry `YamlSyntax` report with no per-field evaluation, in `crates/condarc/src/parse.rs` (FR-008, FR-032a; depends on T011)
+- [X] T050 [US2] Implement root-shape rejection: a `Seq`/scalar root, or a multi-document stream, produces a single-entry `RootShape` report, in `crates/condarc/src/parse.rs` (FR-007, FR-007a, FR-032b; depends on T049, same file)
+- [X] T051 [US2] Implement non-string mapping key handling: a per-key `type_coercion` entry naming the enclosing location, key dropped, evaluation continues, in `crates/condarc/src/parse.rs` (FR-007b; depends on T029)
+- [X] T052 [US2] Wire error accumulation: the per-key loop collects `Err` entries instead of short-circuiting, then runs `validate.rs`'s semantic/alias-collision/cross-field passes, returning `Err(ValidationReport)` (non-accumulable classes first, then catalog order, then alias-collision, then cross-field per research R7) iff any entries exist, in `crates/condarc/src/parse.rs` (FR-030/FR-031; depends on T040–T048, T050, T051)
+- [X] T053 [US2] Update `parse()`/`parse_with_options()` in `crates/condarc/src/lib.rs` to surface the accumulated `ValidationReport` as `Err(_)` (depends on T052, T033)
+- [X] T054 [US2] Integration test `crates/condarc/tests/multi_error_accumulation.rs`: a hand-built document with a bad `channel_alias`, an out-of-range `remote_max_retries`, and a non-boolish `always_copy` yields exactly 3 entries in `report.entries()` (SC-005)
+- [X] T055 [US2] Integration test `crates/condarc/tests/parse_invalid.rs`: single-entry `YamlSyntax`/`RootShape` reports, an alias-collision entry naming both keys, and cross-field entries (spec.md's US2 acceptance scenarios 1–5)
 
 **Checkpoint**: User Stories 1 AND 2 both work independently — the crate accepts valid documents with correct values and rejects invalid documents with complete structured reports, all provable without the conformance harness.
 
@@ -147,15 +147,15 @@ adapter stay at the repo root's `tests/` (unchanged path, per research R10).
 
 ### Implementation for User Story 3
 
-- [ ] T056 [US3] Implement `to_expected_json(&condarc::Config) -> serde_json::Value` — present-only, canonical loader names, FR-041 value encoding incl. non-finite float strings (`"Infinity"`/`"-Infinity"`/`"NaN"`) — in `tests/support/adapter.rs` (FR-040/FR-041, research R9)
-- [ ] T057 [US3] Create `tests/support/mod.rs` with `pub mod adapter;`
-- [ ] T058 [US3] Declare the `Crate`-checker A1 divergence list (the 4 bignum fixture names → expected crate-rejects verdict) alongside the adapter, in `tests/support/adapter.rs` (spec A1; depends on T056)
-- [ ] T059 [US3] Wire `mod support;` into `tests/condarc_conformance.rs` and replace `check_crate`'s always-`Skipped` stub with a real call to `condarc::parse_with_options(&yaml, condarc::ParseOptions { ssl_verify_fs_check: true, ..Default::default() })`, mapping `Ok`/`Err` onto `CheckOutcome`, in `tests/condarc_conformance.rs` (depends on T057, T033, T053)
-- [ ] T060 [US3] Add the adapter exact-comparison assertion for the `Crate` checker inside `valid_condarc_is_accepted` (parallel to the existing `assert_conda_expected_representation` conda check), applying the A1 divergence list, in `tests/condarc_conformance.rs` (depends on T056, T058, T059)
-- [ ] T061 [US3] Run `make conformance-crate` against the full corpus and fix any remaining coercion/validation discrepancies until every `valid/`, `invalid/`, and `expected/` fixture passes (SC-001/SC-002/SC-003; depends on T060)
-- [ ] T062 [US3] Integration test `crates/condarc/tests/public_api_usage.rs` exercising all 5 numbered usage patterns in `contracts/public-api.md`'s "End-to-end usage" section (file read + missing-file fallback, `ValidationReport::entries()` iteration/branching, typed `Config` field reads, `parse_with_options` with `ssl_verify_fs_check: true` against a real existing path, `Config::extra_as::<T>()` over conda-build's 4 out-of-scope keys)
+- [X] T056 [US3] Implement `to_expected_json(&condarc::Config) -> serde_json::Value` — present-only, canonical loader names, FR-041 value encoding incl. non-finite float strings (`"Infinity"`/`"-Infinity"`/`"NaN"`) — in `tests/support/adapter.rs` (FR-040/FR-041, research R9)
+- [X] T057 [US3] Create `tests/support/mod.rs` with `pub mod adapter;`
+- [X] T058 [US3] Declare the `Crate`-checker A1 divergence list (the 4 bignum fixture names → expected crate-rejects verdict) alongside the adapter, in `tests/support/adapter.rs` (spec A1; depends on T056)
+- [X] T059 [US3] Wire `mod support;` into `tests/condarc_conformance.rs` and replace `check_crate`'s always-`Skipped` stub with a real call to `condarc::parse_with_options(&yaml, condarc::ParseOptions { ssl_verify_fs_check: true, ..Default::default() })`, mapping `Ok`/`Err` onto `CheckOutcome`, in `tests/condarc_conformance.rs` (depends on T057, T033, T053)
+- [X] T060 [US3] Add the adapter exact-comparison assertion for the `Crate` checker inside `valid_condarc_is_accepted` (parallel to the existing `assert_conda_expected_representation` conda check), applying the A1 divergence list, in `tests/condarc_conformance.rs` (depends on T056, T058, T059)
+- [ ] T061 [US3] Run `make conformance-crate` against the full corpus and fix any remaining coercion/validation discrepancies until every `valid/`, `invalid/`, and `expected/` fixture passes (SC-001/SC-002/SC-003; depends on T060) — **partially complete**: the adapter/harness wiring itself is done and correctly surfaces discrepancies (2000/2028 crate-checker cases pass); the remaining 28 failures are pre-existing coercion/validation bugs in the Phase 3/4 (`coerce/*.rs`, `validate.rs`) implementation, not in the adapter or harness — deliberately deferred to a dedicated bug-fix pass per explicit direction, rather than fixed opportunistically here. See the phase completion note below for the categorized list.
+- [X] T062 [US3] Integration test `crates/condarc/tests/public_api_usage.rs` exercising all 5 numbered usage patterns in `contracts/public-api.md`'s "End-to-end usage" section (file read + missing-file fallback, `ValidationReport::entries()` iteration/branching, typed `Config` field reads, `parse_with_options` with `ssl_verify_fs_check: true` against a real existing path, `Config::extra_as::<T>()` over conda-build's 4 out-of-scope keys)
 
-**Checkpoint**: All three user stories are complete and independently verified; the `Crate` checker in the conformance harness passes for every fixture alongside the pre-existing `conda`/`openapi` checkers (SC-003).
+**Checkpoint**: The adapter and harness wiring (T056–T060, T062) are complete and independently verified — the `Crate` checker now runs (no longer skipped) and the adapter's exact-comparison logic works correctly, catching real discrepancies. 2000/2028 crate-checker cases currently pass; 28 fail due to pre-existing coercion/validation bugs in Phase 3/4's implementation (not the adapter/harness), intentionally left for a dedicated follow-up bug-fix pass. See T061's note for the categorized failure list. SC-003 ("Crate checker passes for every fixture") is not yet fully met — tracked by reopening T061.
 
 ---
 

@@ -339,6 +339,21 @@ pub struct ParseOptions {
     pub ssl_verify_fs_check: bool,
 }
 
+impl ParseOptions {
+    /// Builder-style setter for [`ssl_verify_fs_check`](Self::ssl_verify_fs_check).
+    ///
+    /// `#[non_exhaustive]` deliberately disallows struct-literal construction (even with
+    /// `..Default::default()`) from outside this crate, so an external caller opts in via
+    /// `ParseOptions::default().with_ssl_verify_fs_check(true)` rather than a struct literal.
+    /// Adding a future option field only needs a new builder method here, never a breaking
+    /// change to this one (Constitution VI's "adding an option field is MINOR").
+    #[must_use]
+    pub fn with_ssl_verify_fs_check(mut self, value: bool) -> Self {
+        self.ssl_verify_fs_check = value;
+        self
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

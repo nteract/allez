@@ -43,9 +43,5 @@ pub fn parse(yaml: &str) -> Result<Config, ValidationReport> {
 /// # Errors
 /// Same failure modes as [`parse`].
 pub fn parse_with_options(yaml: &str, options: ParseOptions) -> Result<Config, ValidationReport> {
-    // `options` is not yet consulted: the opt-in `ssl_verify` filesystem-existence check
-    // (`ssl_verify_fs_check`) is wired into `validate.rs`'s semantic-validation pass, layered on
-    // top of this per-key coercion pipeline.
-    let _ = &options;
-    parse::parse_document(yaml)
+    parse::parse_document(yaml, &options)
 }

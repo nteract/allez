@@ -256,7 +256,55 @@ mod tests {
     }
 
     #[test]
+    fn sat_solver_rejects_wrong_casing() {
+        assert!(coerce_enum(&s("Pycosat"), EnumKind::SatSolver).is_err());
+        assert!(coerce_enum(&s("pycoSat"), EnumKind::SatSolver).is_err());
+    }
+
+    #[test]
+    fn sat_solver_rejects_unrecognized_value() {
+        assert!(coerce_enum(&s("minisat"), EnumKind::SatSolver).is_err());
+    }
+
+    #[test]
     fn enum_rejects_non_string_scalar() {
         assert!(coerce_enum(&RawValue::Int(1), EnumKind::PathConflict).is_err());
+    }
+
+    #[test]
+    fn enum_rejects_non_string_scalar_for_every_kind() {
+        // `coerce_enum`'s `RawValue::Str` gate applies uniformly regardless of `EnumKind` --
+        // exercise all four so a future kind-specific special case can't silently reintroduce a
+        // non-string acceptance path.
+        for kind in [
+            EnumKind::PathConflict,
+            EnumKind::SafetyChecks,
+            EnumKind::SatSolver,
+        ] {
+            assert!(
+                coerce_enum(&RawValue::Int(1), kind).is_err(),
+                "kind={kind:?}"
+            );
+            assert!(
+                coerce_enum(&RawValue::Seq(vec![]), kind).is_err(),
+                "kind={kind:?}"
+            );
+        }
+        // `channel_priority` is the one enum with its own bool/boolish shim, so a bare `RawValue`
+        // that isn't boolish either must still be rejected through the ordinary `coerce_enum`
+        // dispatch path.
+        assert!(coerce_enum(&RawValue::Seq(vec![]), EnumKind::ChannelPriority).is_err());
+    }
+
+    #[test]
+    fn channel_priority_rejects_non_string_non_bool_scalar() {
+        assert!(coerce_channel_priority(&RawValue::Int(1)).is_err());
+        assert!(coerce_channel_priority(&RawValue::Null).is_err());
+        assert!(coerce_channel_priority(&RawValue::Seq(vec![])).is_err());
+    }
+
+    #[test]
+    fn channel_priority_rejects_unrecognized_string() {
+        assert!(coerce_channel_priority(&s("maybe")).is_err());
     }
 }

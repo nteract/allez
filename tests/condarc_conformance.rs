@@ -51,9 +51,17 @@
 //!     `CONDA*`-prefixed environment variables (including `CONDARC`,
 //!     which would otherwise inject one more merged source) are also
 //!     stripped from the subprocess environment for the same reason.
-//!   - **crate**: the not-yet-implemented `condarc` crate (GEN-36).
-//!     Currently always [`CheckOutcome::Skipped`] -- see
-//!     [`check_crate`].
+//!   - **crate**: the `condarc` crate (GEN-36), driven via its own public
+//!     `parse_with_options` entry point (`ssl_verify_fs_check: true`, per
+//!     spec A3) and rendered through the test-only adapter at
+//!     `tests/support/adapter.rs` for the exact `expected/*.json`
+//!     comparison -- see [`check_crate`] and
+//!     [`assert_crate_expected_representation`]. Four `valid/` bignum
+//!     fixtures are declared A1 divergences (fixed-width `i64`/`f64`
+//!     cannot represent them) in
+//!     `support::adapter::CRATE_A1_DIVERGENCES` and are asserted
+//!     *rejected* by this checker specifically, even though conda/openapi
+//!     still accept them -- see `valid_condarc_is_accepted`.
 //!   - **openapi**: validates against the `Condarc` schema nested under
 //!     `components.schemas.Condarc` in `docs/condarc_openapi.json`
 //!     (an OpenAPI 3.1 document; only that one subschema is used as the
@@ -64,8 +72,9 @@
 //!     scope.
 //!
 //! Each checker is automatically skipped (not failed) when its backend
-//! is unavailable (no `conda`-capable python found / crate not
-//! implemented / schema file missing), and can additionally be
+//! is unavailable (no `conda`-capable python found / schema file
+//! missing -- the crate checker's backend, the compiled-in `condarc`
+//! crate, is always available), and can additionally be
 //! force-skipped via `ALLEZ_CONFORMANCE_SKIP_CONDA` /
 //! `ALLEZ_CONFORMANCE_SKIP_CRATE` / `ALLEZ_CONFORMANCE_SKIP_OPENAPI`
 //! (set to `1` or `true`). See the `Makefile`'s `conformance-*` targets
@@ -157,6 +166,8 @@ use std::sync::OnceLock;
 use rstest::rstest;
 use serde_json::Value;
 
+mod support;
+
 // ---------------------------------------------------------------------
 // Checkers
 // ---------------------------------------------------------------------
@@ -166,7 +177,7 @@ use serde_json::Value;
 enum Checker {
     /// Real conda, driven via its own Python `conda.base.context` API.
     Conda,
-    /// The not-yet-implemented `condarc` Rust crate (GEN-36).
+    /// The `condarc` Rust crate (GEN-36).
     Crate,
     /// The `Condarc` subschema of `docs/condarc_openapi.json`,
     /// validated via the `jsonschema` crate.
@@ -632,13 +643,89 @@ fn assert_conda_expected_representation(fixture_path: &Path, value: &Value) {
 // crate checker
 // ---------------------------------------------------------------------
 
-/// The `condarc` crate (GEN-36) doesn't exist yet. Kept as a single,
-/// isolated function so wiring in the real implementation later --
-/// parse `value` with the real crate and map its result/error onto
-/// [`CheckOutcome`] -- is a small, self-contained diff with no other
-/// changes required in this file.
-fn check_crate(_value: &Value) -> CheckOutcome {
-    CheckOutcome::Skipped("condarc crate not implemented yet (GEN-36)".to_string())
+/// Feeds `value` (re-serialized as YAML/JSON text -- JSON is valid YAML for every fixture shape
+/// this suite exercises) to the real `condarc` crate (GEN-36) via
+/// `parse_with_options(.., ssl_verify_fs_check: true)` (spec A3 -- the corpus was generated from
+/// real conda, which always performs the `ssl_verify` filesystem check), mapping `Ok`/`Err` onto
+/// [`CheckOutcome`].
+fn check_crate(value: &Value) -> CheckOutcome {
+    let yaml =
+        serde_json::to_string(value).expect("fixture value should serialize to JSON (valid YAML)");
+    match condarc::parse_with_options(
+        &yaml,
+        condarc::ParseOptions::default().with_ssl_verify_fs_check(true),
+    ) {
+        Ok(_) => CheckOutcome::Valid,
+        Err(report) => CheckOutcome::Invalid(report.to_string()),
+    }
+}
+
+// ---------------------------------------------------------------------
+// crate "expected internal representation" check (adapter exact comparison)
+// ---------------------------------------------------------------------
+//
+// Mirrors `assert_conda_expected_representation` above, but for the crate: re-parses the
+// fixture with `condarc::parse_with_options`, renders it via `support::adapter::to_expected_json`,
+// and asserts exact equality against the same checked-in `conformance/condarc/expected/*.json`
+// conda's own check compares against (contracts/adapter-output.md's comparison semantics).
+
+/// Asserts that the `condarc` crate's rendered representation of `fixture_path` -- computed via
+/// `support::adapter::to_expected_json` -- matches the checked-in
+/// `conformance/condarc/expected/<name>.json` exactly. Only meaningful once `check_crate` has
+/// already returned [`CheckOutcome::Valid`] for this fixture; callers must gate on that
+/// themselves (see `valid_condarc_is_accepted`).
+fn assert_crate_expected_representation(fixture_path: &Path, value: &Value) {
+    let Some(expected_path) = condarc_expected_fixture_path(fixture_path) else {
+        assert!(
+            !value.is_object(),
+            "[Crate expected] {} -- no conformance/condarc/expected/{} fixture exists, but \
+             this fixture's JSON root is an object, so one should. This usually means a \
+             `valid/` fixture was added or renamed without running `make \
+             regenerate-condarc-fixtures` -- run that and commit the resulting expected/ file.",
+            fixture_path.display(),
+            fixture_path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        );
+        println!(
+            "SKIPPED [Crate expected] {}: fixture's JSON root isn't an object, so \
+             scripts/generate_zzz_condarc_expected_fixtures.py intentionally has no \
+             conformance/condarc/expected/ file for it (nothing to resolve keys for)",
+            fixture_path.display(),
+        );
+        return;
+    };
+
+    let yaml =
+        serde_json::to_string(value).expect("fixture value should serialize to JSON (valid YAML)");
+    let cfg = condarc::parse_with_options(
+        &yaml,
+        condarc::ParseOptions::default().with_ssl_verify_fs_check(true),
+    )
+    .unwrap_or_else(|err| {
+        panic!(
+            "[Crate expected] {} -- parse_with_options failed even though check_crate just \
+             accepted this same fixture: {err}",
+            fixture_path.display(),
+        )
+    });
+    let actual = support::adapter::to_expected_json(&cfg);
+
+    let expected_text = std::fs::read_to_string(&expected_path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", expected_path.display()));
+    let expected: Value = serde_json::from_str(&expected_text)
+        .unwrap_or_else(|err| panic!("{} is not valid JSON: {err}", expected_path.display()));
+
+    assert_eq!(
+        actual,
+        expected,
+        "[Crate expected] {} -- the condarc crate's adapted representation does not match {} \
+         exactly (contracts/adapter-output.md's comparison semantics: missing key, extra key, \
+         renamed key, or wrong value all fail this check).",
+        fixture_path.display(),
+        expected_path.display(),
+    );
 }
 
 // ---------------------------------------------------------------------
@@ -852,16 +939,44 @@ fn valid_condarc_is_accepted(
 ) {
     let value = load_fixture(&path);
     let outcome = checker.check(&value);
+
+    // The `Crate` checker has exactly four declared A1 divergences (spec Assumptions A1):
+    // fixed-width i64/f64 cannot represent these fixtures' arbitrary-precision numerals, so the
+    // crate deliberately *rejects* them even though they stay in `valid/` (real conda, and the
+    // openapi schema, still accept them -- see `support::adapter::CRATE_A1_DIVERGENCES`). This
+    // is an assertion, not a suppression: a listed fixture that stops diverging fails loudly
+    // below, and no adapter comparison ever runs for a fixture the crate rejects.
+    if checker == Checker::Crate && support::adapter::is_crate_a1_divergence(&path) {
+        match outcome {
+            CheckOutcome::Invalid(_) => {}
+            CheckOutcome::Valid => panic!(
+                "[Crate] {} is a declared A1 divergence (tests/support/adapter.rs's \
+                 CRATE_A1_DIVERGENCES) -- the crate was expected to reject it, but now accepts \
+                 it. If this is an intentional, reviewed behavior change, remove it from the \
+                 divergence list and confirm the adapter comparison passes for it instead.",
+                path.display()
+            ),
+            CheckOutcome::Skipped(reason) => {
+                println!("SKIPPED [Crate] {}: {reason}", path.display());
+            }
+        }
+        return;
+    }
+
     let was_valid = matches!(outcome, CheckOutcome::Valid);
     assert_outcome(outcome, true, checker, &path);
 
-    // Beyond accept/reject, also check *what* conda parsed this fixture
-    // into against the checked-in conformance/condarc/expected/*.json --
-    // see the "conda expected internal representation" section above.
-    // Only conda has this today, and only once it has actually accepted
-    // the fixture (nothing to compare a rejection against).
-    if checker == Checker::Conda && was_valid {
-        assert_conda_expected_representation(&path, &value);
+    // Beyond accept/reject, also check *what* each producing checker parsed this fixture into
+    // against the checked-in conformance/condarc/expected/*.json -- see the "expected internal
+    // representation" sections above. Only conda and the crate produce a value today (openapi
+    // is schema-only, accept/reject), and only once each has actually accepted the fixture
+    // (nothing to compare a rejection against).
+    if was_valid {
+        match checker {
+            Checker::Conda => assert_conda_expected_representation(&path, &value),
+            Checker::Crate => assert_crate_expected_representation(&path, &value),
+            Checker::OpenApi => {}
+        }
     }
 }
 

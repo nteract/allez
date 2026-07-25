@@ -148,17 +148,33 @@ fn parse_float_literal(cleaned: &str) -> Option<f64> {
 /// `local_repodata_ttl`'s `(bool, int)` narrower boolish vocabulary (FR-020,
 /// docs/condarc_research.md §8 items 6/11): `typify_str_no_hint`'s hand-rolled regex table, a
 /// *strict subset* of `boolify()`'s own `BOOLISH_TRUE`/`BOOLISH_FALSE` — no single-letter `y`/`n`,
-/// no `non`/`none`/`null`/`~`/empty-string tokens, no non-decimal-base literals.
+/// no `non`/`none`/`null`/`~`/empty-string tokens, no non-decimal-base literals, **and no PEP-515
+/// underscore digit-group separators**: `typify_str_no_hint`'s `INT` regex is the hand-written
+/// `^[-+]?\d+$` (`conda/auxlib/type_coercion.py::_Regex.INT`), not Python's `int()` builtin, so
+/// `"1_000"` fails to match *any* of its regexes (INT/FLOAT/BIN/OCT/HEX all require a leading
+/// digit or `0x`/`0o`/`0b` immediately, none tolerate an embedded `_`) and is returned unchanged
+/// as a `str`, which then fails `collect_errors`'s `isinstance(_, (bool, int))` check --
+/// `local_repodata_ttl: "1_000"` is rejected even though the same PEP-515 string is a perfectly
+/// valid `local_repodata_ttl`-*unrelated* integer elsewhere (`Int`/`Float`/`boolify()`'s own
+/// numeric-string probe all *do* support underscores; this one narrower path just doesn't).
+/// **A native (non-string) YAML float is also always rejected**, never truncated: `typify()`
+/// dispatches a native float through `typify_str_no_hint(str(value))` exactly like a string, so
+/// `1.5` -> `"1.5"` matches the `FLOAT` regex and comes back as a Python `float` -- which then
+/// *also* fails the `isinstance(_, (bool, int))` check (a `float` is never an `int` instance in
+/// Python). Both empirically confirmed via the real conda oracle:
+/// `conformance/condarc/invalid/local_repodata_ttl_reject_{float,string_underscored_int}.json`.
 pub(crate) fn coerce_bool_or_int(value: &RawValue) -> Result<BoolOrInt, CoercionError> {
     match value {
         RawValue::Bool(b) => return Ok(BoolOrInt::Bool(*b)),
         RawValue::Int(i) => return Ok(BoolOrInt::Int(*i)),
         RawValue::Float(f) => {
-            if f.is_finite() && *f >= i64::MIN as f64 && *f < 9_223_372_036_854_775_808.0 {
-                return Ok(BoolOrInt::Int(*f as i64));
-            }
             return Err(CoercionError::simple(
-                format!("the numeric value {f} is out of range for local_repodata_ttl"),
+                format!(
+                    "the float value {f} is not a valid local_repodata_ttl value (a native \
+                     float is never truncated to an integer here -- conda's own \
+                     typify_str_no_hint round-trip yields a Python `float`, which fails the \
+                     (bool, int) type check)"
+                ),
                 input_repr(value),
             ));
         }
@@ -186,15 +202,15 @@ pub(crate) fn coerce_bool_or_int(value: &RawValue) -> Result<BoolOrInt, Coercion
         return Ok(BoolOrInt::Bool(false));
     }
 
-    // Otherwise, fall back to plain integer parsing (still ASCII/PEP-515 only; no hex/oct/bin).
-    if is_ascii_only(trimmed)
-        && let Some(cleaned) = strip_pep515_underscores(trimmed)
-        && let Some(i) = parse_int_literal(&cleaned)
-    {
+    // Otherwise, fall back to plain integer parsing -- but, unlike `Int`/`Float`, **no PEP-515
+    // underscore support** (`typify_str_no_hint`'s `INT` regex is `^[-+]?\d+$`, not `int()`; see
+    // this function's doc comment) and still ASCII-only/no hex-oct-bin.
+    if is_ascii_only(trimmed) && let Some(i) = parse_int_literal(trimmed) {
         return Ok(BoolOrInt::Int(i));
     }
 
     Err(CoercionError::simple(
+
         format!(
             "{raw:?} is not a valid local_repodata_ttl value (expected true/yes/on, false/no/off, or an integer)"
         ),
@@ -357,6 +373,14 @@ mod tests {
     }
 
     #[test]
+    fn bool_or_int_rejects_underscored_integer_strings() {
+        // Unlike `Int`/`Float`, `typify_str_no_hint`'s hand-written `INT` regex
+        // (`^[-+]?\d+$`) has no PEP-515 underscore support at all -- this is rejected, not
+        // parsed as `1000` (docs/condarc_research.md §8 item 6, this function's doc comment).
+        assert!(coerce_bool_or_int(&s("1_000")).is_err());
+    }
+
+    #[test]
     fn bool_or_int_rejects_narrower_tokens_valid_elsewhere() {
         // "y"/"n"/"non"/"none"/"" are valid boolish tokens for other keys, but not here
         // (docs/condarc_research.md §8 item 6).
@@ -371,7 +395,13 @@ mod tests {
     }
 
     #[test]
-    fn bool_or_int_rejects_out_of_range_float_per_a1() {
+    fn bool_or_int_rejects_any_float_never_truncates() {
+        // A native YAML float is *always* rejected for `local_repodata_ttl`, never truncated to
+        // an int -- not even an in-range, whole-number-valued one (`1.5`/`2.0` alike; see this
+        // function's doc comment). This supersedes the old "A1 out-of-range only" framing: the
+        // real conda oracle rejects `local_repodata_ttl: 1.5` too, well within any numeric range.
+        assert!(coerce_bool_or_int(&RawValue::Float(1.5)).is_err());
+        assert!(coerce_bool_or_int(&RawValue::Float(2.0)).is_err());
         assert!(coerce_bool_or_int(&RawValue::Float(1e30)).is_err());
         assert!(coerce_bool_or_int(&RawValue::Float(f64::INFINITY)).is_err());
         assert!(coerce_bool_or_int(&RawValue::Float(f64::NAN)).is_err());

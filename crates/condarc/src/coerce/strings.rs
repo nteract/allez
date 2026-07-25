@@ -46,13 +46,35 @@ pub(crate) fn coerce_plain_string(value: &RawValue) -> Result<String, CoercionEr
     stringify(value)
 }
 
-/// `NullableString` — `(str, None)` (FR-015): like `PlainString`, except the literal string
-/// `"none"` (case-insensitive) coerces to a null value, and a bare YAML `null` is null outright.
+/// `NullableString` — `(str, None)` (FR-015): like `PlainString`, except:
+///
+/// - conda's `LoadedParameter.typify()` unconditionally strips a *string* value's leading/
+///   trailing whitespace before any further dispatch (`if isinstance(value, str): value =
+///   value.strip()`) whenever `element_type` is a *tuple* (e.g. `(str, NoneType)`) rather than
+///   the single class `str` -- the whitespace-*preserving* short-circuit in
+///   `_typify_data_structure` (`PlainString`'s behavior above) only fires for a single concrete
+///   `str` `element_type`, per `isinstance(type_hint, type)` (docs/condarc_research.md §2.1/§2.4
+///   item 5). A non-string scalar (bool/int/null) is unaffected -- only an already-`str` value is
+///   stripped.
+/// - after stripping, the literal string `"none"` (case-insensitive) coerces to a null value,
+///   and a bare YAML `null` is null outright.
+///
+/// Empirically confirmed via the real conda oracle: `client_ssl_cert_key: "  NoNe\t"` strips to
+/// `"NoNe"` then null-folds (case-insensitively) to unset; `override_virtual_packages: {k: "   "}`
+/// strips its value to `""` (conformance/condarc/valid/
+/// {default_python,dict_of_strings,post_build_validation,ssl_verify_passthrough}_*whitespace*
+/// fixtures) -- and that stripped, possibly-empty string is what downstream validators (e.g.
+/// `default_python`'s range check, `post_build_validation`'s `client_ssl_cert`/
+/// `client_ssl_cert_key` cross-field truthiness check) actually see.
 pub(crate) fn coerce_nullable_string(value: &RawValue) -> Result<Option<String>, CoercionError> {
     if matches!(value, RawValue::Null) {
         return Ok(None);
     }
     let s = stringify(value)?;
+    let s = match value {
+        RawValue::Str(_) => s.trim().to_string(),
+        _ => s,
+    };
     if s.eq_ignore_ascii_case("none") {
         Ok(None)
     } else {
@@ -104,14 +126,28 @@ mod tests {
     }
 
     #[test]
-    fn nullable_string_behaves_like_plain_string_otherwise() {
+    fn nullable_string_strips_whitespace_before_the_none_check_and_the_return_value() {
+        // Unlike `PlainString`, a `(str, None)` element type is a tuple, so conda's
+        // whitespace-preserving `_typify_data_structure` short-circuit does not fire -- the
+        // ordinary `typify()` unconditional `.strip()` applies instead.
+        assert_eq!(coerce_nullable_string(&s("  NoNe\t")), Ok(None));
         assert_eq!(
-            coerce_nullable_string(&s("hello")),
+            coerce_nullable_string(&s("  hello  ")),
             Ok(Some("hello".to_string()))
         );
+        assert_eq!(coerce_nullable_string(&s("   ")), Ok(Some(String::new())));
+        assert_eq!(coerce_nullable_string(&s("\t\n")), Ok(Some(String::new())));
+    }
+
+    #[test]
+    fn nullable_string_coerces_non_string_scalars_without_stripping() {
         assert_eq!(
             coerce_nullable_string(&RawValue::Int(7)),
             Ok(Some("7".to_string()))
+        );
+        assert_eq!(
+            coerce_nullable_string(&RawValue::Bool(false)),
+            Ok(Some("False".to_string()))
         );
     }
 }

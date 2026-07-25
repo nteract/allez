@@ -25,28 +25,61 @@ enum Boolified {
     Str(String),
 }
 
-/// Port of `conda/auxlib/type_coercion.py::boolify` (docs/condarc_research.md §2.2). `nullable`
-/// enables the `NULL_STRINGS` branch (FR-013); `return_string` enables the final passthrough
-/// instead of erroring on an unboolifiable string (`ssl_verify`'s `(str, bool)` shape, FR-024).
+/// Port of `conda/auxlib/type_coercion.py::boolify` (docs/condarc_research.md §2.2), as actually
+/// *reached* from a `.condarc` YAML value via `common/configuration.py`'s
+/// `LoadedParameter.typify()` / `_typify_data_structure()` -- not `boolify()` called directly.
+/// `nullable` enables the `NULL_STRINGS` branch (FR-013); `return_string` enables the final
+/// passthrough instead of erroring on an unboolifiable string (`ssl_verify`'s `(str, bool)`
+/// shape, FR-024).
+///
+/// `boolify()`'s own docstring shows list/dict/tuple/set going through *plain Python
+/// truthiness* (`BOOL_COERCEABLE_TYPES` includes `list`/`set`/`dict`/`tuple`) -- but that is
+/// `boolify()` called *directly* (e.g. on an env var string, or a CLI flag), never how a
+/// `.condarc` YAML value actually reaches it. `_typify_data_structure` (docs/condarc_research.md
+/// §8 item 7) checks `isiterable(value)` *before* any `element_type`/`boolify()` involvement, so
+/// a YAML list/map given to a boolean-shaped setting takes the "recurse into elements" branch
+/// instead, producing a `tuple`/`frozendict` that then fails `collect_errors`'s
+/// `isinstance(typed_value, self._type)` check with a clean `InvalidTypeError` -- `boolify()` is
+/// never even called. Empirically confirmed for every boolish `ValueKind` (`Bool`, `NullableBool`,
+/// `SslVerifyKind`, `BoolOrIntKind`) via the real conda oracle: `override_channels_enabled: []`,
+/// `always_yes: []`, `ssl_verify: []`, `local_repodata_ttl: []` all raise `InvalidTypeError`
+/// ("Parameter ... has type tuple/list. Valid types: bool[, ...]"), regardless of emptiness --
+/// see `conformance/condarc/invalid/boolish_values_reject_{array,object}_{empty,nonempty}.json`.
 fn boolify(
     value: &RawValue,
     nullable: bool,
     return_string: bool,
 ) -> Result<Boolified, CoercionError> {
-    // Step 1: `isinstance(value, BOOL_COERCEABLE_TYPES)` -> plain Python truthiness. `NoneType`
-    // is deliberately *not* in that tuple, so a bare YAML null falls through to the string probe
-    // below (it's stringified as `"None"` first, exactly like Python's `str(None)`).
+    // Step 1: numeric/bool scalars coerce via plain Python truthiness (`isinstance(value,
+    // NUMBER_TYPES) or isinstance(value, bool)`, effectively). `NoneType` is deliberately *not*
+    // truthiness-coerced here, so a bare YAML null falls through to the string probe below (it's
+    // stringified as `"None"` first, exactly like Python's `str(None)`). A YAML list/map is
+    // *never* truthiness-coerced for a `.condarc` value -- see this function's doc comment --
+    // it's a clean type-mismatch error instead, matching real conda's `InvalidTypeError`.
     match value {
         RawValue::Bool(b) => return Ok(Boolified::Bool(*b)),
         RawValue::Int(i) => return Ok(Boolified::Bool(*i != 0)),
         RawValue::Float(f) => return Ok(Boolified::Bool(*f != 0.0)),
-        RawValue::Seq(items) => return Ok(Boolified::Bool(!items.is_empty())),
-        RawValue::Map(map) => return Ok(Boolified::Bool(!map.is_empty())),
+        RawValue::Seq(_) | RawValue::Map(_) => {
+            return Err(CoercionError::simple(
+                "expected a boolean (a list/mapping is not truthiness-coerced for a .condarc \
+                 value -- conda's own `.condarc` loader never reaches `boolify()` for a \
+                 collection-shaped value; see boolish.rs's `boolify` doc comment)"
+                    .to_string(),
+                input_repr(value),
+            ));
+        }
         RawValue::Null | RawValue::Str(_) => {}
     }
 
+    // conda's `LoadedParameter.typify()` unconditionally strips a *string* value's whitespace
+    // before any further dispatch (`if isinstance(value, str): value = value.strip()`,
+    // docs/condarc_research.md §2.1) -- boolify() itself is called with this already-stripped
+    // string, so both the matching probe below *and* the `return_string` passthrough must use
+    // the stripped form, not the raw original (docs/condarc_research.md §8, ssl_verify
+    // whitespace-padded `truststore`/path fixtures).
     let original_str = match value {
-        RawValue::Str(s) => Some(s.clone()),
+        RawValue::Str(s) => Some(s.trim().to_string()),
         _ => None,
     };
     let stringified = original_str.clone().unwrap_or_else(|| "None".to_string());
@@ -211,12 +244,13 @@ mod tests {
     }
 
     #[test]
-    fn bool_accepts_collections_via_truthiness() {
-        assert_eq!(coerce_bool(&RawValue::Seq(vec![])), Ok(false));
-        assert_eq!(
-            coerce_bool(&RawValue::Seq(vec![RawValue::Int(1)])),
-            Ok(true)
-        );
+    fn bool_rejects_lists_and_maps_regardless_of_emptiness() {
+        // Real conda never reaches `boolify()` for a collection-shaped `.condarc` value --
+        // `InvalidTypeError` fires first, for `[]`/`[1]`/`{}`/`{"a": 1}` alike (see `boolify`'s
+        // doc comment and docs/condarc_research.md §8 item 7).
+        assert!(coerce_bool(&RawValue::Seq(vec![])).is_err());
+        assert!(coerce_bool(&RawValue::Seq(vec![RawValue::Int(1)])).is_err());
+        assert!(coerce_bool(&RawValue::Map(indexmap::IndexMap::new())).is_err());
     }
 
     #[test]

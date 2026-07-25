@@ -56,21 +56,53 @@ fn sequence_items(value: &RawValue) -> Result<Option<Vec<RawValue>>, CoercionErr
     }
 }
 
-/// The raw-shape gate shared by every map-typed setting (FR-023): require an object, `null`
-/// (unset), or an empty sequence `[]` (the symmetric counterpart of `sequence_items`'s empty-`{}`
-/// allowance).
+/// The raw-shape gate shared by every map-typed setting (FR-023): require an object, or `null`
+/// (unset). **Not** symmetric with [`sequence_items`]'s empty-`{}` allowance: an empty (or
+/// non-empty) YAML *list* is unconditionally rejected here, matching real conda's
+/// `MapParameter.load()`, which gates on `isinstance(value, Mapping)` -- a `list`/`tuple` is
+/// never a `Mapping` instance, empty or not, so `custom_multichannels: []` (and every other
+/// map-typed setting given a bare list) raises `InvalidTypeError` regardless of the list's
+/// length. This *looks* like it should mirror `sequence_items`'s `isiterable()`-based leniency
+/// (a `dict` is iterable, so an empty one is accepted in a list-typed slot) but doesn't, because
+/// `MapParameter` and `SequenceParameter` use two different, non-symmetric raw-shape gates in
+/// conda's own source (`common/configuration.py`) -- `isinstance(_, Mapping)` for the former,
+/// `isiterable(_)` for the latter. Empirically confirmed via the real conda oracle: `channels:
+/// {}` is accepted (`()`), but `custom_channels: []` raises `InvalidTypeError` ("has type tuple.
+/// Valid types: frozendict") -- see `conformance/condarc/invalid/
+/// {custom_multichannels,dict_of_strings}_values_reject_bare_list_empty.json` and
+/// `channel_settings_reject_array_nested_empty_array_element.json` (an empty-list *element*
+/// inside a `channel_settings` entry hits this same gate, since each element is itself
+/// map-shaped).
 fn map_entries(
     value: &RawValue,
 ) -> Result<Option<indexmap::IndexMap<String, RawValue>>, CoercionError> {
     match value {
         RawValue::Null => Ok(None),
         RawValue::Map(map) => Ok(Some(map.clone())),
-        RawValue::Seq(items) if items.is_empty() => Ok(Some(indexmap::IndexMap::new())),
         _ => Err(CoercionError::simple(
             "expected a mapping".to_string(),
             input_repr(value),
         )),
     }
+}
+
+/// Deduplicate `items`, keeping each value's *first* occurrence and dropping later exact
+/// repeats. conda's own `SequenceLoadedParameter.merge()` (`common/configuration.py`) always
+/// runs a sequence-typed setting's *matches* through `unique()` before returning them -- and it
+/// does so unconditionally, even for a single-source `.condarc` with nothing to merge, so a
+/// document's own internal duplicates are deduplicated too, not just duplicates arising *across*
+/// multiple config sources. Shared by every `SequenceParameter`-shaped `ValueKind`
+/// (`StringSeq`/`ListFieldsSeq`/`ChannelSettingsSeq`) -- empirically confirmed via the real conda
+/// oracle for all three: `channels: [a, a]` reads back as `('a',)`; `list_fields: [name, name]`
+/// as `('name',)`; `channel_settings: [{channel: x}, {channel: x}]` as a single-element tuple.
+fn dedup_preserving_order<T: PartialEq>(items: Vec<T>) -> Vec<T> {
+    let mut out: Vec<T> = Vec::with_capacity(items.len());
+    for item in items {
+        if !out.contains(&item) {
+            out.push(item);
+        }
+    }
+    out
 }
 
 /// `StringSeq` — `SequenceParameter(str)` (FR-021).
@@ -84,7 +116,7 @@ pub(crate) fn coerce_string_seq(value: &RawValue) -> Result<Option<Vec<String>>,
             .map_err(|e| e.nest(PathSegment::Index { index: i }))?;
         out.push(coerced);
     }
-    Ok(Some(out))
+    Ok(Some(dedup_preserving_order(out)))
 }
 
 /// `ListFieldsSeq` — `StringSeq` further restricted to the closed `CONDA_LIST_FIELDS` vocabulary
@@ -117,7 +149,7 @@ pub(crate) fn coerce_list_fields_seq(
             })?;
         out.push(member);
     }
-    Ok(Some(out))
+    Ok(Some(dedup_preserving_order(out)))
 }
 
 /// `StringMap` — `MapParameter(str)` (FR-023).
@@ -173,7 +205,15 @@ pub(crate) fn coerce_string_seq_map(
 }
 
 /// `ChannelSettingsSeq` — `SequenceParameter(MapParameter(str))` (`channel_settings` only,
-/// FR-023). Each element must itself be a string-to-string map.
+/// FR-023). Each element must itself be a string-to-string map; a `null` element has no "unset"
+/// concept to propagate to (there is no absent-vs-present distinction for one entry inside a
+/// sequence, the same reasoning as `coerce_string_seq_map`'s inner-`null`-to-empty-list handling
+/// above), so it is treated as an empty map -- matching real conda's `MapParameter.load()`,
+/// which returns an empty `MapLoadedParameter` outright when `match.value(...)` is `None`
+/// (confirmed via the oracle: `channel_settings: [null]` reads back as `({},)`, not a rejection;
+/// see `conformance/condarc/valid/channel_settings_accept_array_element_null_treated_as_empty_map.json`
+/// and its `array_size_2_*` siblings). The sequence as a whole is still deduplicated afterward
+/// (`dedup_preserving_order`), so `[null, null]` collapses to a single `{}` entry.
 pub(crate) fn coerce_channel_settings_seq(
     value: &RawValue,
 ) -> Result<Option<Vec<ChannelSetting>>, CoercionError> {
@@ -184,16 +224,10 @@ pub(crate) fn coerce_channel_settings_seq(
     for (i, item) in items.iter().enumerate() {
         let entry = coerce_string_map(item)
             .map_err(|e| e.nest(PathSegment::Index { index: i }))?
-            .ok_or_else(|| {
-                CoercionError::simple(
-                    "expected a mapping (not null)".to_string(),
-                    input_repr(item),
-                )
-                .nest(PathSegment::Index { index: i })
-            })?;
+            .unwrap_or_default();
         out.push(ChannelSetting(entry));
     }
-    Ok(Some(out))
+    Ok(Some(dedup_preserving_order(out)))
 }
 
 #[cfg(test)]
@@ -313,11 +347,10 @@ mod tests {
     }
 
     #[test]
-    fn string_map_accepts_an_empty_sequence_as_an_empty_mapping() {
-        assert_eq!(
-            coerce_string_map(&RawValue::Seq(vec![])),
-            Ok(Some(BTreeMap::new()))
-        );
+    fn string_map_rejects_an_empty_sequence_not_symmetric_with_sequence_items() {
+        // `MapParameter.load()` gates on `isinstance(value, Mapping)`, not `isiterable()` --
+        // a bare list is never a mapping, empty or not (see `map_entries`'s doc comment).
+        assert!(coerce_string_map(&RawValue::Seq(vec![])).is_err());
     }
 
     #[test]
@@ -379,8 +412,26 @@ mod tests {
     }
 
     #[test]
-    fn channel_settings_seq_rejects_a_null_element() {
-        assert!(coerce_channel_settings_seq(&RawValue::Seq(vec![RawValue::Null])).is_err());
+    fn channel_settings_seq_treats_a_null_element_as_an_empty_map() {
+        let result = coerce_channel_settings_seq(&RawValue::Seq(vec![RawValue::Null]))
+            .unwrap()
+            .unwrap();
+        assert_eq!(result, vec![ChannelSetting(BTreeMap::new())]);
+    }
+
+    #[test]
+    fn channel_settings_seq_dedupes_identical_elements_preserving_order() {
+        let mut a = indexmap::IndexMap::new();
+        a.insert("channel".to_string(), RawValue::Str("x".to_string()));
+        let mut b = indexmap::IndexMap::new();
+        b.insert("channel".to_string(), RawValue::Str("x".to_string()));
+        let result = coerce_channel_settings_seq(&RawValue::Seq(vec![
+            RawValue::Map(a),
+            RawValue::Map(b),
+        ]))
+        .unwrap()
+        .unwrap();
+        assert_eq!(result.len(), 1);
     }
 
     #[test]

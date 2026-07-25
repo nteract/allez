@@ -44,6 +44,42 @@ Three structural checks, all of which must pass:
      passes, but `float("3.10.1")` raises `ValueError`, caught and
      turned into the same failure message.
 
+**What comes after the dot is whatever `float()` accepts, not
+"[0-9][0-9]?"** -- this is the single most misread part of the check,
+so the batteries below pin it down explicitly (GEN-36 spec FR-026):
+
+  - *Any* digit count is fine (`"3.99"`, `"3.999999"`,
+    `"3.9999999999"`), because only `float(value)`'s numeric range is
+    checked, never the digit count.
+  - The characters after the dot need not be digits at all, as long as
+    `float()` still parses the whole string: `"3.e0"` (`float("3.e0")
+    == 3.0`), `"2.0e0"`, and `"2.5E0"` are all **accepted**, since
+    `value[1] == "."` looks only at index 1 and the exponent suffix is
+    the `float()` parser's problem, not the shape check's.
+  - PEP 515 digit-group underscores ride along with `float()` too:
+    `float("2.5_5") == 2.55`, so `"2.5_5"` is **accepted**, while
+    `"3._5"` (underscore not between digits) raises `ValueError` and is
+    rejected.
+  - `float()` accepts any Unicode decimal digit, so conda also accepts
+    e.g. `"\u0663.\u0669"` (Arabic-Indic three-point-nine), verified
+    empirically against conda 26.5.3. **No fixture is generated for
+    this**: Rust's `f64::from_str` is ASCII-only, so the GEN-36 crate
+    deliberately does not reproduce it (documented as language-
+    difference simplification A4 in
+    `specs/GEN-36_condarc_parser_library/spec.md`), and a fixture that
+    conda accepts while the crate rejects cannot live in either
+    `valid/` or `invalid/` without a per-checker divergence mechanism
+    the harness does not have. It is recorded here (and in the spec)
+    rather than encoded as a conformance case.
+  - An exponent can also push an otherwise-well-shaped value *out* of
+    range: `"3.5e-1"` passes the length/dot checks but
+    `float("3.5e-1") == 0.35 < 2.0`, so it is rejected by the range
+    check, not the shape check.
+
+The upshot for a re-implementation: the rule is exactly
+"`len >= 3` and `value[1] == '.'` and the *whole string* parses as a
+float in `[2.0, 4.0)`" -- **not** a regex over digits.
+
 **Whitespace IS stripped for this key**, unlike `channel_alias` (see
 `generate_channel_alias_condarc_fixtures.py`'s module docstring for the
 contrasting case). `default_python`'s `element_type` is the *tuple*
@@ -137,6 +173,20 @@ ACCEPT_CANDIDATES: list[tuple[str, object]] = [
     # between the documented-looking pattern and the real check.
     ("value_3_99_three_significant_digits", "3.99"),
     ("value_3_999999_many_digits_still_in_range", "3.999999"),
+    # Two fraction digits that are both zeros -- another "digit count is
+    # irrelevant, only float(value)'s range matters" data point.
+    ("value_2_00_zero_padded_fraction", "2.00"),
+    # The characters after the dot need not be digits at all: value[1]
+    # is still ".", and float() happily parses an exponent suffix, so
+    # all three of these load as in-range floats. An implementation that
+    # models this check as a `[23]\.[0-9]{1,2}` regex would wrongly
+    # reject every one of them -- see the module docstring.
+    ("exponent_form_no_digit_after_dot", "3.e0"),
+    ("exponent_form_zero_exponent", "2.0e0"),
+    ("exponent_form_uppercase_e", "2.5E0"),
+    # PEP 515 digit-group underscores are accepted by float() itself:
+    # float("2.5_5") == 2.55, comfortably in range.
+    ("pep515_underscore_in_fraction", "2.5_5"),
     # A value extremely close to (but still strictly below) the
     # exclusive upper boundary.
     ("range_upper_boundary_just_below_4_0", "3.9999999999"),
@@ -184,6 +234,15 @@ REJECT_CANDIDATES: list[tuple[str, object]] = [
     # A negative-looking string: value[0] == "-", value[1] == "3", not
     # ".", so it fails the shape check outright.
     ("leading_minus_sign_shifts_dot_position", "-3.5"),
+    # value[1] == "." passes, but float("3._5") raises ValueError: PEP
+    # 515 only allows underscores *between* digits, so this is the
+    # rejecting counterpart to the accepted "2.5_5".
+    ("pep515_underscore_adjacent_to_dot", "3._5"),
+    # Length and dot checks both pass and float() parses fine, but the
+    # exponent drags the value below the [2.0, ...) lower boundary:
+    # float("3.5e-1") == 0.35. Fails the range check, not the shape
+    # check -- the mirror image of the accepted "3.e0"/"2.5E0" cases.
+    ("exponent_shifts_value_below_lower_boundary", "3.5e-1"),
     # bool/int values are stringified (str(True) == "True", str(0) ==
     # "0", str(100) == "100") rather than rejected at the type-coercion
     # stage -- all three then fail default_python_validation's own

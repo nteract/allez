@@ -566,41 +566,49 @@ need (FR-037). Stringly-typed errors — **rejected** by FR-037 explicitly.
 
 ## R6 — `ssl_verify` filesystem-existence branch (FR-024 / FR-002 / A3)
 
-**Decision**: The *portable* default path accepts `ssl_verify` values that are boolean, boolish/
-numeric strings, or the literal `truststore`, and rejects other non-boolish strings — **matching
-what the conformance corpus encodes** (A3: the schema/fixtures only exercise the portable subset,
-incl. the current-dir path `"."`). The real `os.path.exists` check is offered as an **opt-in
-runtime option**, not a Cargo feature: entry points take a `ParseOptions` argument carrying an
-`ssl_verify_fs_check: bool` field (default `false` via `ParseOptions::default()`), e.g.
-`condarc::parse(path)` keeps the hermetic default and `condarc::parse_with_options(path,
-ParseOptions { ssl_verify_fs_check: true, ..Default::default() })` opts a given call into the real
-filesystem check. With the flag off, a non-boolish, non-`truststore` `ssl_verify` string is rejected
-(the conservative, hermetic behavior); with it on, the crate additionally accepts strings that name
-an existing path, matching conda exactly at runtime for GEN-23's real use.
+**Decision**: Parsing is **side-effect-free by default**, and the `os.path.exists` branch of
+`ssl_verify` is an **opt-in runtime option** — not a Cargo feature, and not the default. Concretely:
 
-**Rationale**: FR-002 forbids environment access during parse "except where a setting's validity is
-inherently defined in terms of the local filesystem." Making that the *only* FS touch, and gating it
-behind an explicit, caller-supplied runtime option rather than a Cargo feature, keeps the default
-call hermetic and deterministic (Constitution IX) and keeps conformance portable (A3), while still
-letting GEN-23 opt in per call for exact conda behavior. A Cargo feature is the wrong shape for a
-per-call behavioral choice: it is a compile-time, whole-build-graph switch — Cargo unifies features
-across every crate that depends on `condarc` in a given build, so one dependent enabling it turns it
-on for *all* dependents, with no way for two callers in the same binary to disagree, and no way to
-toggle it per environment (e.g. hermetic in tests, real FS check at runtime) without two separate
-builds of the crate. A plain function/struct argument has none of that: it is an ordinary,
-non-unifying, call-site-visible value, so the same compiled library serves both GEN-23 (passes
-`ssl_verify_fs_check: true`) and any hermetic/test caller (uses the default) from one binary. The
-corpus never asserts a real path exists, so the default (flag-off) call passes conformance; passing
-the flag does not change any conformance verdict.
+- `ParseOptions::default()` (used by `condarc::parse(yaml)`) performs **no** filesystem access at
+  all. A non-boolish, non-`truststore` `ssl_verify` string is taken at face value as a certificate
+  path (`SslVerify::Path`). Two runs of the same document on two different machines therefore agree,
+  which is exactly the determinism Constitution IX and FR-002 ask for.
+- `condarc::parse_with_options(yaml, ParseOptions { ssl_verify_fs_check: true, ..Default::default() })`
+  additionally requires that such a path exist, rejecting it otherwise — conda's exact runtime rule.
+- **The conformance harness passes `ssl_verify_fs_check: true`.** The corpus was generated *from real
+  conda*, which always performs the check, so the corpus encodes FS-checking behavior:
+  `invalid/ssl_verify_passthrough_reject_string_arbitrary_word.json` (`"banana"`),
+  `..._reject_string_nonexistent_path.json`, `..._reject_truststore_wrong_case.json` and
+  `..._reject_string_hex_literal_shaped.json` are rejections *because* those strings are not existing
+  paths (with the flag off the crate would accept all four), while
+  `valid/ssl_verify_passthrough_accept_existing_path_parent_dir.json` (`".."`) and
+  `..._accept_existing_path_dot_slash.json` (`"./"`) are acceptances *because* those paths exist. Both
+  accepting fixtures were added in this review round: the pre-existing `"."` fixture does **not**
+  exercise the path branch at all, because `boolify`'s `.replace(".", "", 1)` probe reduces `"."` to
+  `""`, a `BOOLISH_FALSE` token, so conda loads it as the boolean `false` (its `expected/` fixture
+  records exactly that). The corpus's paths are chosen so the check stays deterministic (`..` and `./`
+  exist relative to any working directory; the rejected paths never exist), so opting in costs the
+  harness no reproducibility — and it means the crate is held to conda's real behavior rather than to a
+  weaker portable subset.
+
+**Rationale**: FR-002 wants a pure parse; conda's real rule wants a stat(2). Splitting them along an
+explicit, caller-supplied runtime option satisfies both, with the *safe, surprise-free* choice as the
+default (Constitution V): a library that silently touches the filesystem because of a string in its
+input is the more surprising design, so that behavior must be asked for. The alternative default —
+*rejecting* any unverifiable path when the check is off — was considered and rejected: it would make
+`condarc::parse` refuse a perfectly ordinary `ssl_verify: /etc/ssl/certs/ca.pem` for no reason the
+caller can see, i.e. it would trade a side effect for a false negative. Accepting-unverified is the
+honest "I did not check" answer, and callers who need the check can ask for it.
 
 **Alternatives considered**: Always doing the FS check — **rejected**: non-deterministic across
-environments, breaks hermetic conformance, and pushes an environment dependency onto every consumer
-with no way to opt out. Never doing it — acceptable for conformance but loses runtime fidelity for
-GEN-23; the runtime option preserves both. A Cargo feature flag (`ssl-verify-fs-check`) —
-**rejected**: compile-time only, subject to Cargo's whole-build-graph feature unification (enabling
-it anywhere in the dependency tree enables it everywhere, for callers who never opted in), unable to
-vary per call or per environment within one binary, and a heavier, more surprising control surface
-than an ordinary argument for what is fundamentally a per-call choice, not a build-time capability.
+environments and forces an environment dependency onto every consumer with no way to opt out. Never
+doing it — **rejected**: loses runtime fidelity for GEN-23 *and* makes the `ssl_verify` conformance
+fixtures unsatisfiable (they only make sense against a filesystem). A Cargo feature flag
+(`ssl-verify-fs-check`) — **rejected**: compile-time only, subject to Cargo's whole-build-graph
+feature unification (enabling it anywhere in the dependency tree enables it everywhere, for callers
+who never opted in), unable to vary per call or per environment within one binary, and a heavier,
+more surprising control surface than an ordinary argument for what is fundamentally a per-call
+choice, not a build-time capability.
 
 ---
 
@@ -621,34 +629,38 @@ for semantics — consumers branch on `kind`+`location`, not index).
 
 ---
 
-## R8 — Absent settings & the "off-state boolean" default (FR-038 / FR-039)
+## R8 — Absent settings: no defaulting layer at all (FR-038)
 
-**Decision**: `Config` models every setting as absent-by-default. The primary representation is
-"optional/nullable → reads back as not-set." Per FR-039, plain non-nullable booleans **MAY** be
-stored as `Option<bool>` too (uniform, simplest) — the design does **not** collapse them to bare
-`false`, to avoid any risk of the adapter emitting a key that was absent. The adapter emits a
-setting **only if it was present** in the document (FR-040), so absence is always faithfully
-represented regardless.
+**Decision**: `Config` models every setting as `Option<_>` (or `Option<Option<_>>` for conda's
+nullable `(T, None)` settings). Absent means absent: `None`. There is **no** defaults table, **no**
+effective-value layer, and **no** "sensible off-state" shortcut — a plain boolean that conda documents
+as defaulting to `false` is still `Option<bool>` and still reads back as `None` when the document did
+not set it. Callers apply their own default policy explicitly, at the point of use.
 
-**Rationale**: FR-038 forbids a defaults table and a separate effective-value layer. Uniform
-`Option<T>` storage is the simplest honest model, makes "was this set?" trivial for GEN-23, and
-guarantees the adapter's present-only contract (FR-040) holds without special-casing. FR-039 only
-*permits* the `false` shortcut; choosing not to take it removes an entire failure mode (accidental
-emission of an absent key) at zero cost. This is the safe default (Constitution V).
+**Rationale**: It is the simplest honest model: "was this set?" is answerable, the adapter's present-only contract (FR-040)
+holds without special-casing, and the crate never has to track upstream default changes. An earlier
+draft of this spec permitted storing off-state booleans as bare `false` (the old FR-039); that
+permission has been **removed** from the spec, so uniform `Option` is now the requirement, not merely
+the preferred option.
 
-**Alternatives considered**: Backfilling conda defaults — **rejected** by FR-038. Storing plain
-bools as `bool` with `false` default — permitted by FR-039 but rejected here for the adapter-safety
-reason above.
+**Alternatives considered**: Backfilling conda defaults — **rejected** by FR-038 and by the ticket
+("missing-vs-default is explicitly out of scope"). Storing plain bools as `bool` defaulting to `false`
+— **rejected**: it silently invents a value the document never contained, makes "unset" and
+"explicitly false" indistinguishable to the caller, and risks the adapter emitting a key for a setting
+that was absent.
 
 ---
 
 ## R9 — Adapter (internal → `expected/` JSON) details (FR-040 / FR-041)
 
-**Decision**: The `Config` → `expected/`-shaped-JSON adapter is **conformance-test code, not a
-library feature**, and lives with the test harness (e.g. a support module alongside
-`tests/condarc_conformance.rs`), not under `crates/condarc/src/`. Concretely, a function with the
-shape `to_expected_json(&condarc::Config) -> serde_json::Value` — callable only from the test crate,
-since it takes the library's own public `Config` as input — emits a JSON object keyed by conda's
+**Decision**: The `Config` → `expected/`-shaped-JSON adapter is **conformance-harness support code,
+not a library feature**. It lives in the *same test target* as the harness that uses it —
+`tests/support/adapter.rs`, declared as `mod support;` from `tests/condarc_conformance.rs` — and **not**
+under `crates/condarc/src/`, and **not** under `crates/condarc/tests/` (see R10: a test file in another
+crate's `tests/` directory is unreachable from this harness; that was raised in PR review and confirmed
+empirically). Concretely, a function with the shape
+`to_expected_json(&condarc::Config) -> serde_json::Value` — consuming the library's own public `Config`
+from outside the crate, exactly as any downstream caller would — emits a JSON object keyed by conda's
 **canonical loader attribute names** (aliases resolved: `channel`→`channels`,
 `verify_ssl`→`ssl_verify`, `yes`→`always_yes`, `virtual_packages`→`override_virtual_packages`,
 etc. — the full map derived from research §1.3 / §4 and cross-checked against every `expected/`
@@ -661,8 +673,15 @@ fixture), containing **only present settings**. Value encoding:
 - strings → JSON string; nullable-string null → JSON `null`;
 - sequences → JSON array; maps → JSON object; `channel_settings` → array of string→string objects.
 
-Conformance comparison is **subset-based** (FR-040): for each `valid/` fixture, for every key in the
-corresponding `expected/` fixture, assert the adapted value equals it.
+Conformance comparison is **exact** (FR-040): for each `valid/` fixture, the adapted JSON object must
+equal the whole `expected/` fixture — no missing keys, no extra keys, no renamed keys. PR review asked
+whether subset comparison could hide an adapter emitting keys it shouldn't; it could, so the weaker
+comparison was dropped. Exactness was verified to be achievable *before* committing to it: for all 388
+object-rooted `valid/` fixtures, the set of canonical names of the document's keys equals the key set of
+the corresponding `expected/` fixture — but only after correcting one catalog entry, `auto_activate`
+(canonical) vs. `auto_activate_base` (alias), which the original draft had backwards. `valid/null_root.json`
+has no `expected/` file (the generator skips non-object roots) and is therefore exempt from the adapter
+comparison, exactly as it is for the conda checker.
 
 **Rationale**: The literal acceptance criterion (SC-002) is that the *conformance harness* can prove
 byte-for-byte agreement with the committed `expected/*.json` oracle — nothing in FR-040/FR-041 or the
@@ -684,8 +703,9 @@ serialization the library needs to offer or support long-term. Keeping it in the
 The canonical-name map and the non-finite string encoding are both dictated by the committed
 `expected/` fixtures (verified above against
 `expected/aliases_accept_alias_spellings_all_params.json` and
-`expected/numeric_values_accept_float_only_string_inf_lower.json`). Subset comparison keeps the
-harness robust to the FR-039 boolean-default option even though this design doesn't use it.
+`expected/numeric_values_accept_float_only_string_inf_lower.json`), and the whole catalog's
+canonical/alias table was additionally cross-checked mechanically against a live conda 26.5.3
+`Context` (all 99 entries agree — see data-model.md §5).
 
 **Alternatives considered**:
 - Forcing `Config`'s internal layout to mirror the JSON exactly — **rejected** by the ticket
@@ -704,25 +724,50 @@ harness robust to the FR-039 boolean-default option even though this design does
 
 ---
 
-## R10 — Workspace restructure (FR-003)
+## R10 — Workspace restructure (FR-003) and where the harness/adapter live
 
-**Decision**: Convert the repo root `Cargo.toml` into a `[workspace]` with members
-`crates/allez` (the existing binary, moved from `src/`) and `crates/condarc` (new library). The
-repo-level `tests/`, `conformance/`, `docs/`, `Makefile`, `deny.toml` stay at root and continue to
-work; `tests/condarc_conformance.rs` uses `CARGO_MANIFEST_DIR`-relative paths that remain valid when
-run from the workspace root.
+**Decision**: Convert the repo-root `Cargo.toml` into a workspace **without moving the existing
+`allez` package**: the root manifest keeps its `[package]` table and gains
+`[workspace] members = [".", "crates/condarc"]`. The new library is added at `crates/condarc/`, and
+`allez` takes it as a `path` dependency (a dev-dependency until GEN-23 consumes it for real). The
+conformance harness stays exactly where it is (`tests/condarc_conformance.rs`, a test target of the
+root `allez` package), and the test-only adapter lives beside it as `tests/support/adapter.rs`,
+included via `mod support;` from the harness.
 
-**Rationale**: FR-003 requires a standalone, publishable library independent of the `allez` binary.
-A workspace is the idiomatic Rust way to keep them in one repo while allowing `condarc` to be
-published separately later. Moving the binary into `crates/allez/` keeps the two crates symmetric.
-**Open risk to validate in implementation**: confirm `#[files("conformance/...")]` globs in the
-harness still resolve from the workspace root (they use relative paths from `CARGO_MANIFEST_DIR` of
-the *test's* crate — the harness must remain a workspace-root/`allez`-crate test, or the glob base
-adjusted). This is called out as an early task, not a blocker.
+**Why not `crates/allez/` + `crates/condarc/tests/conformance_support.rs`** (the earlier draft):
+PR review asked how a root `tests/` file could reach adapter code living under another crate's
+`tests/` directory. It can't, and both halves of the problem were verified empirically in a scratch
+workspace before deciding:
+1. `condarc::conformance_support::…` fails to compile (`error[E0433]: cannot find
+   'conformance_support' in 'condarc'`) — a crate's `tests/` directory is a set of separate test
+   binaries, not part of the library, so nothing outside that crate's own test targets can name it.
+2. The only way to make it "work" is `#[path = "../crates/condarc/tests/conformance_support.rs"] mod
+   support;`, which compiles the same file into two different test binaries and drags that file's own
+   `#[test]` functions into the harness binary as a side effect. That's a hack, not a design.
+3. Keeping the adapter as `tests/support/adapter.rs` in the *same* target as the harness compiles
+   cleanly, and cargo does **not** auto-discover files in `tests/` subdirectories as additional test
+   targets, so `support` exists only as a module of the harness — also verified.
+
+Keeping `allez` as the root package (rather than moving it to `crates/allez/`) additionally means:
+- `rstest`'s `#[files("conformance/condarc/valid/*.json")]` globs, which expand relative to the test's
+  `CARGO_MANIFEST_DIR`, keep resolving — the harness's manifest dir is still the repo root. Moving the
+  package would have required rewriting every glob and `env!("CARGO_MANIFEST_DIR")`-relative path in
+  the harness to `../../…`, which is exactly the fragility the review was pointing at.
+- `Makefile` and `.github/workflows/ci.yml` need **no** path changes: `cargo test --test
+  condarc_conformance --features conformance-tests` still selects the root package, and `touch
+  tests/condarc_conformance.rs` still targets the right file.
+- `cargo test --all` / `--workspace` picks up `condarc`'s own unit and integration tests too.
+
+The cost is cosmetic asymmetry (one package at the root, one under `crates/`), which is a normal Cargo
+layout and a smaller price than rewriting the harness's path handling. `condarc` remains independently
+publishable (FR-003): it has its own manifest, no dependency on `allez`, and no knowledge of the
+`expected/` fixture format (the adapter lives on the `allez`/harness side of the boundary).
 
 **Alternatives considered**: Keep `condarc` as a module inside the `allez` binary — **rejected** by
-FR-003 (not independently publishable, couples to the binary). Separate repo — **rejected**: the
-conformance corpus and harness live here; a submodule/second repo would fracture the oracle.
+FR-003 (not independently publishable, couples to the binary). Move `allez` into `crates/allez/`
+anyway — **rejected**: pure churn plus harness path rewrites, for symmetry alone. Ship the adapter as
+its own workspace crate — **rejected** as ceremony for a single-consumer test helper (see R9). Publish
+the adapter from `condarc/src/` — **rejected** by R9 (permanent public surface for a test-only need).
 
 ---
 
@@ -733,9 +778,9 @@ conformance corpus and harness live here; a submodule/second repo would fracture
 | YAML parser choice | `yaml-rust2` (R1); stable API, matches `config-rs` ecosystem precedent, pending `cargo deny`/`audit` confirmation |
 | Unknown/custom-key surfacing | retain as `extra: HashMap<String, serde_json::Value>`, plus an `extra_as::<T>()` convenience method; caller re-deserializes on demand (R2) |
 | Error crate / trait impl | hand `Error`+`Display`, derive `Serialize`, optional `thiserror` (R5) |
-| FR-024 `ssl_verify` FS access | opt-in runtime `ParseOptions.ssl_verify_fs_check` flag, default off, not a Cargo feature (R6) |
+| FR-024 `ssl_verify` FS access | opt-in runtime `ParseOptions.ssl_verify_fs_check` flag, default off (parse is side-effect-free; unverified paths accepted), not a Cargo feature; conformance harness opts in (R6) |
 | Error ordering / determinism | fixed catalog order, documented (R7) |
-| Absent-setting representation | uniform `Option<T>`; adapter emits present-only (R8) |
-| Workspace vs. module | Cargo workspace, `crates/condarc` (R10) |
+| Absent-setting representation | uniform `Option<T>`, no defaulting layer at all; adapter emits present-only (R8) |
+| Workspace vs. module | Cargo workspace: root package `allez` stays put, library added as `crates/condarc`; harness + test-only adapter both live in the root package's `tests/` target (R10) |
 
 All `NEEDS CLARIFICATION` items are resolved. No open blockers for Phase 1.

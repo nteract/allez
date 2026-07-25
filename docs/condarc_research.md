@@ -149,11 +149,34 @@ BOOL_COERCEABLE_TYPES = (int, bool, float, complex, list, set, dict, tuple)
    False`, `[] → False`, `[1,2,3] → True` (non-empty!), `{} → False`, `{"a":
    1} → True` (non-empty!).
 2. Else (value is a string not already caught above, or possibly `None` —
-   `NoneType` is *not* in `BOOL_COERCEABLE_TYPES`), stringify + lowercase +
-   strip, then strip a trailing/internal `.`-related numeric check: if
-   `val.isnumeric()` → `bool(float(val))` (so `"0"→False`, `"0.0"` — not
-   numeric per `str.isnumeric()`'s stricter rules — falls through instead;
-   `"2"→True`).
+   `NoneType` is *not* in `BOOL_COERCEABLE_TYPES`), build the probe string
+   `val = str(value).strip().lower().replace(".", "", 1)` — i.e. lowercase,
+   strip surrounding whitespace, and **delete the first `.` anywhere in the
+   string** — then: if `val.isnumeric()` → `bool(float(val))`.
+
+   That single dot-deletion is easy to skim past and has three separate
+   observable consequences, all of which a re-implementation must
+   reproduce:
+   - It is what makes *decimal* strings boolify at all: `"3.5".isnumeric()`
+     is `False`, but the probe string `"35"` is numeric, so `"3.5" → True`
+     (and `"0.0"` → probe `"00"` → `bool(float("00"))` → `False`). Note the
+     `float()` is applied to the **dot-stripped** probe, not the original —
+     harmless for truthiness (deleting one dot only rescales by a power of
+     ten, so zero-ness is preserved) but worth knowing.
+   - It makes the bare string `"."` **false**: the probe is `""`, and `""`
+     is a `BOOLISH_FALSE` token (step 5). This is why `ssl_verify: "."`
+     loads as the boolean `False` and never reaches
+     `ssl_verify_validation`'s `os.path.exists()` branch at all — see
+     `conformance/condarc/expected/ssl_verify_passthrough_accept_existing_path_current_dir.json`,
+     which records `{"ssl_verify": false}`. (`".."` and `"./"`, whose probes
+     are `"."` and `"/"`, are *not* tokens and do pass through as strings —
+     those are the fixtures that genuinely exercise the path branch.)
+   - It makes a *dotted* boolish token still a token: `"yes."` → probe
+     `"yes"` → `True`, `"none."` → probe `"none"` → `False`.
+
+   `str.isnumeric()` also accepts non-ASCII Unicode digits (`"٣" → True`),
+   which the GEN-36 crate deliberately does not reproduce — see that spec's
+   assumption A4.
 3. `val in BOOLISH_TRUE` (`"true","yes","on","y"`, case-folded) → `True`.
 4. If `nullable` and `val in NULL_STRINGS` (`"none","~","null","\0"`) →
    `None`. (`str(None).lower()` is `"none"`, which is in `NULL_STRINGS` —

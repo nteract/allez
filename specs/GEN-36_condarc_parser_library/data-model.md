@@ -47,8 +47,28 @@ enum RawValue {
                                         // also holds bignum/over-range numeral text, per A1)
     Seq(Vec<RawValue>),
     Map(IndexMap<String, RawValue>),   // insertion-ordered -> deterministic MultipleKeys detection
+                                        // string keys only -- see "Out of scope" below
 }
 ```
+
+- **Out of scope: multi-document streams and non-string keys (spec FR-007a/FR-007b).** A `.condarc`
+  is *JSON-shaped* YAML: exactly one document, mappings keyed by strings. `RawValue::Map` therefore
+  has no room for a non-string key by construction, and that is deliberate:
+  - `YamlLoader::load_from_str` returns a `Vec<Yaml>` (one element per document in the stream).
+    Zero documents (empty input) lowers to `RawValue::Null` → empty `Config` (FR-005). Exactly one
+    document is the normal path. **Two or more documents** is a single `root_shape` error entry
+    ("expected a single YAML document, found N") — non-accumulable, like any other root-shape
+    problem (FR-032b).
+  - A `Yaml::Hash` entry whose key is not a `Yaml::String` (`1: x`, `[a]: b`, `? {}: y`) yields one
+    `type_coercion` entry located at the enclosing setting (or `Root` for a root-level key), and the
+    entry is dropped rather than coerced. This is accumulable: one bad key does not stop the rest of
+    the document from being evaluated.
+  - Anchors/aliases and merge keys need no special handling: `yaml-rust2` resolves them before we
+    lower, so whatever they expand to is treated as an ordinary value. Nothing in the crate needs to
+    understand them.
+  - No conformance fixture asserts conda's behavior for either case (the corpus is generated from
+    JSON documents, which are single-document and string-keyed by construction), so these rules are
+    the crate's own documented contract rather than a conda-matching requirement.
 
 - **Rules**: root `Null` → empty `Config` (FR-005); root `Map` → normal parse (FR-006); root
   `Seq`/scalar → single `root_shape` error entry (FR-007, FR-032). A YAML syntax error
@@ -201,8 +221,13 @@ pub struct Config {
     // ---- 2.1.6 Output, Prompt, and Flow Control Configuration (§4.7) ----
     /// Nullable. Alias: `yes`.
     pub always_yes: Option<Option<bool>>,
-    /// Alias: `auto_activate`.
-    pub auto_activate_base: Option<bool>,
+    /// Auto-activate the base environment in new shells. **Canonical name is
+    /// `auto_activate`**; the historically-documented `auto_activate_base`
+    /// spelling is the *alias* (verified against conda 26.5.3:
+    /// `Context.auto_activate`'s `ParameterLoader.name == "auto_activate"`,
+    /// `aliases == ("auto_activate_base",)`), which is also why every
+    /// `expected/*.json` fixture records this setting as `auto_activate`.
+    pub auto_activate: Option<bool>,
     pub default_activation_env: Option<String>,
     pub auto_stack: Option<i64>,
     pub changeps1: Option<bool>,
@@ -348,9 +373,11 @@ pub enum SslVerify {
     Bool(bool),
     /// The literal string `"truststore"`.
     Truststore,
-    /// A string that is boolish/numeric-looking but not a JSON bool, or
-    /// (with `ParseOptions::ssl_verify_fs_check` set) an existing
-    /// filesystem path (research R6).
+    /// A certificate path (any non-boolish, non-`truststore` string). With
+    /// the default, side-effect-free options this is accepted *without*
+    /// consulting the filesystem; with
+    /// `ParseOptions::ssl_verify_fs_check` set, a path that does not exist
+    /// is rejected instead of producing this variant (research R6, §6).
     Path(String),
 }
 
@@ -413,7 +440,7 @@ enum ValueKind {
 
 ```rust
 struct Setting {
-    canonical: &'static str,            // user-facing canonical name (Config field, adapter key)
+    canonical: &'static str,            // conda's canonical loader name (Config field, adapter key)
     aliases: &'static [&'static str],   // other accepted spellings (FR-011); empty if none
     kind: ValueKind,                    // coercion shape (§4)
     validator: Option<SemanticValidator>, // channel_alias | default_python | ssl_verify | list_fields
@@ -485,7 +512,7 @@ static CATALOG: &[Setting] = &[
     Setting { canonical: "execute_threads", aliases: &[], kind: ValueKind::Int, validator: None },
     // §4.7 Output, Prompt, and Flow Control Configuration
     Setting { canonical: "always_yes", aliases: &["yes"], kind: ValueKind::NullableBool, validator: None },
-    Setting { canonical: "auto_activate_base", aliases: &["auto_activate"], kind: ValueKind::Bool, validator: None },
+    Setting { canonical: "auto_activate", aliases: &["auto_activate_base"], kind: ValueKind::Bool, validator: None },
     Setting { canonical: "default_activation_env", aliases: &[], kind: ValueKind::PlainString, validator: None },
     Setting { canonical: "auto_stack", aliases: &[], kind: ValueKind::Int, validator: None },
     Setting { canonical: "changeps1", aliases: &[], kind: ValueKind::Bool, validator: None },
@@ -534,10 +561,30 @@ The catalog is the single source of truth for names, aliases, types, and validat
 logic is duplicated elsewhere (Constitution IV). Its declaration order (as written above) defines
 error-entry ordering (research R7) and adapter key ordering.
 
+**`canonical` means conda's loader name, not `settings.rst`'s prose name.** The whole table above was
+mechanically cross-checked against a live conda 26.5.3 (`Context`'s `ParameterLoader`s: `loader.name`
+with any leading `_` stripped, plus `loader._names` for the alias set) — all 99 entries match exactly,
+including alias sets. Exactly one entry needed correcting from the human-written first draft:
+`auto_activate` is the canonical name and `auto_activate_base` its alias, *not* the other way round
+(`settings.rst` documents the `_base` spelling for historical reasons, but `expected/*.json` records
+`auto_activate`, because that is the loader's real name). Keeping `canonical` == conda's loader name is
+what makes the exact adapter comparison (spec FR-040) hold: for all 388 object-rooted `valid/`
+fixtures, the canonical names of the document's keys are exactly the `expected/` fixture's key set.
+
+**Conda parameters deliberately *not* in the catalog** (they land in `Config::extra`, §2.1.10):
+`bld_path`, `croot`, `anaconda_upload`/`binstar_upload`, `conda_build`/`conda-build` (conda-build
+config, out of scope per FR-009) and the CLI/ephemeral flags `clobber`, `deps_modifier`,
+`download_only`, `dry_run`, `force`, `force_remove`, `ignore_pinned`, `update_modifier`,
+`use_index_cache`, `use_local` (conda *can* load these from a `.condarc`, but they are
+command-invocation modifiers, not documented `.condarc` settings — `docs/condarc_research.md` §4 does
+not list them, and no conformance fixture sets one). Because the adapter never emits `extra`, a future
+fixture that does set one of these would fail the exact comparison — which is the intended signal to
+add it to the catalog rather than to loosen the comparison.
+
 **Alias pairs** (20 total, FR-029 / `multiple_keys_error_*` fixtures — each pair's two spellings
 MUST NOT both appear in one document): `channels`/`channel`, `always_yes`/`yes`,
 `ssl_verify`/`verify_ssl`, `always_copy`/`copy`, `always_softlink`/`softlink`,
-`auto_update_conda`/`self_update`, `auto_activate_base`/`auto_activate`,
+`auto_update_conda`/`self_update`, `auto_activate`/`auto_activate_base`,
 `prefix_data_interoperability`/`pip_interop_enabled`, `allowlist_channels`/`whitelist_channels`,
 `disallowed_packages`/`disallow`, `client_ssl_cert`/`client_cert`,
 `client_ssl_cert_key`/`client_cert_key`, `add_anaconda_token`/`add_binstar_token`,
@@ -551,16 +598,23 @@ MUST NOT both appear in one document): `channels`/`channel`, `always_yes`/`yes`,
 
 ```rust
 /// Runtime options for [`parse_with_options`]. `ParseOptions::default()`
-/// is the hermetic, conformance-portable behavior used by [`parse`].
+/// is the side-effect-free behavior used by [`parse`]: parsing is then a
+/// pure function of the input string, with no filesystem, network, or
+/// environment access at all (FR-002).
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ParseOptions {
-    /// When `true`, a non-boolish, non-`truststore` `ssl_verify` string is
-    /// additionally accepted if it names an existing filesystem path
-    /// (matching conda's runtime behavior exactly). Default `false`: only
-    /// the portable subset (bool/boolish/numeric/`truststore`) is
-    /// accepted — the only environment access this crate ever performs,
-    /// and only when this flag is explicitly set (FR-002, FR-024).
+    /// Opt into conda's `ssl_verify` path-existence check.
+    ///
+    /// Default `false`: a non-boolish, non-`truststore` `ssl_verify`
+    /// string is accepted as an unverified certificate path
+    /// ([`SslVerify::Path`]), and the crate touches nothing outside its
+    /// input.
+    ///
+    /// Set to `true` to additionally require that such a path exists on
+    /// the local filesystem, rejecting it otherwise — exactly conda's
+    /// runtime rule (FR-024). This is the only filesystem access the
+    /// crate can ever perform, and only on explicit request.
     pub ssl_verify_fs_check: bool,
 }
 ```
@@ -568,11 +622,30 @@ pub struct ParseOptions {
 A plain struct argument (not a Cargo feature) because the choice is per-call, not per-build: Cargo
 features unify across the whole dependency graph of a binary, so one dependent enabling a feature
 would silently turn it on for every other dependent — wrong for a behavior GEN-23 wants on and a
-hermetic test suite wants off, from the same compiled library (research R6, full rationale there).
+hermetic caller wants off, from the same compiled library (research R6, full rationale there).
+
+**Who sets it:** GEN-23's runtime path sets `ssl_verify_fs_check: true` (it wants conda's exact
+semantics), and so does the conformance harness's `Crate` checker — the corpus was generated from real
+conda, which always performs the check, so `ssl_verify` fixtures like `"banana"` and
+`/definitely/does/not/exist/...` are rejections *because* the path does not exist, while `"."` is an
+acceptance *because* it does (spec A3). Everything else — every unit test, every hermetic caller —
+uses the default.
 
 ---
 
 ## 7. Error model (`error.rs`)  *(Key Entity: Parse/validation error)*
+
+The types below are the Rust side of the versioned JSON contract in
+`contracts/error-report.schema.json`; every `serde` attribute here exists to make
+`serde_json::to_value(&report)` validate against that schema, and the two are meant to be read
+side by side:
+
+| schema location | Rust |
+|---|---|
+| top-level `{ "schema_version": "1.0.0", "entries": [...] }` | `ValidationReport { schema_version, entries }` (the version is a serialized constant, not caller-settable) |
+| `entries[]` object with `location`/`kind`/`message`/`input`/`involved` | `ErrorEntry`'s five public fields |
+| `location` / `pathSegment` / `inputRepr` `oneOf` branches discriminated by `"type"` | internally-tagged enums (`#[serde(tag = "type", rename_all = "snake_case")]`) — which is why each data-carrying variant is a **struct** variant with a named field, not a newtype variant (serde cannot internally tag a newtype variant wrapping a primitive) |
+| `errorKind` string enum | `ErrorKind` with `#[serde(rename_all = "snake_case")]` |
 
 ```rust
 /// Accumulates every independent problem found while parsing one
@@ -581,12 +654,20 @@ hermetic test suite wants off, from the same compiled library (research R6, full
 /// `contracts/error-report.schema.json`).
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct ValidationReport {
+    /// Serialized as the constant `"1.0.0"` so a machine consumer can
+    /// version-check the payload independently of the crate's own SemVer
+    /// (schema `required: ["schema_version", "entries"]`). Not
+    /// constructible or overridable by callers.
+    #[serde(serialize_with = "serialize_schema_version")]
+    schema_version: SchemaVersion,
     entries: Vec<ErrorEntry>,
 }
 impl ValidationReport {
     /// Every accumulated problem, in the deterministic order documented
     /// in research R7 (never the input document's key order).
     pub fn entries(&self) -> &[ErrorEntry] { &self.entries }
+    /// The JSON-contract version this report serializes as (`"1.0.0"`).
+    pub fn schema_version(&self) -> &'static str { SCHEMA_VERSION }
 }
 impl std::fmt::Display for ValidationReport { /* one line per entry, human-readable */ }
 impl std::error::Error for ValidationReport {}
@@ -601,18 +682,22 @@ pub struct ErrorEntry {
     pub message: String,
     pub input: InputRepr,
     /// Populated only for `AliasCollision`/`CrossField`: every setting
-    /// name involved (FR-033).
+    /// name involved (FR-033). Always serialized (possibly as `[]`), since
+    /// the schema requires the key.
     pub involved: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum Location {
     Root,
-    Setting(String),
-    Nested { setting: String, path: Vec<PathSegment> }, // e.g. channel_settings[2].auth
+    Setting { setting: String },
+    /// e.g. `channel_settings[2].auth`
+    Nested { setting: String, path: Vec<PathSegment> },
 }
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
-pub enum PathSegment { Index(usize), Key(String) }
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PathSegment { Index { index: usize }, Key { key: String } }
 
 /// Stable, machine-readable problem category (FR-033). `serde` renames to
 /// the exact strings in `contracts/error-report.schema.json`.
@@ -621,16 +706,39 @@ pub enum PathSegment { Index(usize), Key(String) }
 #[serde(rename_all = "snake_case")]
 pub enum ErrorKind {
     YamlSyntax,          // non-accumulable (FR-032a) — single-entry report
-    RootShape,           // non-accumulable (FR-032b) — single-entry report
-    TypeCoercion,
+    RootShape,           // non-accumulable (FR-032b) — single-entry report, also covers
+                         // multi-document input (FR-007a)
+    TypeCoercion,        // also covers a non-string mapping key (FR-007b)
     SemanticValidation,
     AliasCollision,
     CrossField,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
-pub enum InputRepr { Bool(bool), Int(i64), Float(f64), Str(String), Null, Seq, Map, Raw(String) }
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum InputRepr {
+    Bool { value: bool },
+    Int { value: i64 },
+    /// Finite values only — see the note below.
+    Float { value: f64 },
+    Str { value: String },
+    Null,
+    Seq,
+    Map,
+    /// A value with no faithful JSON encoding: an over-range numeral
+    /// (A1), or a non-finite float (`"NaN"`/`"Infinity"`/`"-Infinity"`),
+    /// recorded as its source text.
+    Raw { value: String },
+}
 ```
+
+- **Non-finite floats never use `InputRepr::Float`.** `serde_json` cannot serialize `NaN`/`±inf`
+  (it errors), which would break the "always machine-readable" guarantee (FR-034) for exactly the
+  inputs most likely to be reported. Constructors therefore route a non-finite value to
+  `InputRepr::Raw { value: "NaN" | "Infinity" | "-Infinity" }`, matching how `expected/*.json`
+  encodes the same values (FR-041).
+- **`schema_version` is emitted, not accepted.** The report is serialize-only (no `Deserialize`),
+  so the constant can never disagree with the schema the crate was built against.
 
 **State/flow**: `parse()`/`parse_with_options()` produce exactly one of: `Ok(Config)`; `Err(report)`
 with a single non-accumulable entry (`YamlSyntax` OR `RootShape`); or `Err(report)` with ≥1
@@ -644,9 +752,12 @@ accumulated per-field/alias/cross-field entries. Never both a `Config` and error
 &str (YAML text)
   │  yaml-rust2 (R1)                    NOT serde — no Deserializer impl
   ▼
-yaml_rust2::Yaml                        resolved scalar type: Boolean/Integer/Real/String/Null/...
-  │  parse.rs: lower(&Yaml) -> RawValue         (hand-written match)
+Vec<yaml_rust2::Yaml>                   one element per document in the stream
+  │  0 documents ─▶ treated as Null root;  >1 documents ─▶ RootShape error (FR-007a)
   ▼
+yaml_rust2::Yaml                        resolved scalar type: Boolean/Integer/Real/String/Null/...
+  │  parse.rs: lower(&Yaml) -> RawValue         (hand-written match; non-string map key ─▶
+  ▼                                             TypeCoercion entry, key dropped — FR-007b)
 RawValue (§1, crate-private)
   │
   ├─ root Null  ───────────────────────────────────────────────▶ Ok(Config::default())
@@ -667,7 +778,8 @@ report.entries.is_empty()?
 
 (YAML syntax error, anywhere above RawValue) ─▶ Err(ValidationReport{1 entry: YamlSyntax})
 
-Config ─▶ (test-crate only, research R9) to_expected_json(&Config) -> serde_json::Value
+Config ─▶ (conformance-harness support code only, research R9)
+           to_expected_json(&Config) -> serde_json::Value
 Config ─▶ Config::extra_as::<T>() -> Result<T, serde_json::Error>   (research R2, public API)
 ```
 
@@ -676,6 +788,8 @@ Config ─▶ Config::extra_as::<T>() -> Result<T, serde_json::Error>   (researc
 | Rule | Where | FR |
 |---|---|---|
 | root shape (null/map ok; seq/scalar err) | `parse.rs` | FR-005..007, FR-032 |
+| multi-document stream → single root-shape error | `parse.rs` | FR-007a |
+| non-string mapping key → per-key coercion error | `parse.rs` | FR-007b |
 | YAML syntax → single error | `parse.rs` | FR-008, FR-032 |
 | boolish coercion (3 variants) | `coerce/boolish.rs` | FR-012/013 |
 | numeric coercion + `i64`/`f64` bound | `coerce/numeric.rs` | FR-018/019, A1 |
@@ -685,9 +799,10 @@ Config ─▶ Config::extra_as::<T>() -> Result<T, serde_json::Error>   (researc
 | sequence raw-shape + element typify | `coerce/sequences.rs` | FR-021 |
 | `list_fields` closed vocab | `coerce/sequences.rs` + `validate.rs` | FR-022 |
 | map settings incl. multichannels/channel_settings | `coerce/sequences.rs` | FR-023 |
-| `ssl_verify` (bool/boolish/truststore/path) | `coerce/boolish.rs` + `validate.rs` | FR-024, R6 |
+| `ssl_verify` bool/boolish/`truststore`/unverified path (default) | `coerce/boolish.rs` | FR-024 |
+| `ssl_verify` path existence — opt-in only | `validate.rs` | FR-024, A3, R6 |
 | `channel_alias` scheme regex `^$|^[a-z][a-z0-9]{0,11}://` | `validate.rs` | FR-025 |
-| `default_python` `^$|^[23]\.[0-9]{1,2}$` | `validate.rs` | FR-026 |
+| `default_python`: empty/null, **or** `len >= 3` ∧ `value[1] == '.'` ∧ whole string parses as an ASCII float in `[2.0, 4.0)` (**not** a `[0-9]{1,2}` digit pattern — `3.e0`/`2.5E0`/`2.5_5` are all valid; A4 for the ASCII limitation) | `validate.rs` | FR-026, A4 |
 | `client_ssl_cert_key` requires `client_ssl_cert` | `validate.rs` | FR-027 |
 | `always_copy` ⊕ `always_softlink` | `validate.rs` | FR-028 |
 | alias collision (20 pairs) | `validate.rs` | FR-029 |

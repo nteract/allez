@@ -37,8 +37,9 @@ pub fn parse(yaml: &str) -> Result<Config, ValidationReport>;
 
 /// Parse with explicit [`ParseOptions`]. Use this to opt into the real
 /// filesystem `ssl_verify` existence check (`ssl_verify_fs_check: true`)
-/// for exact conda runtime fidelity; the default `parse()` never touches
-/// the filesystem (FR-002, research R6).
+/// for exact conda runtime fidelity; the default [`parse`] never touches
+/// the filesystem and accepts an `ssl_verify` path string unverified
+/// (FR-002/FR-024, research R6).
 ///
 /// # Errors
 /// Same failure modes as [`parse`].
@@ -49,12 +50,12 @@ pub fn parse_with_options(yaml: &str, options: ParseOptions) -> Result<Config, V
 
 | Type | Kind | Contract |
 |---|---|---|
-| `Config` | struct, `#[non_exhaustive]` | One `Option<_>` (or `Option<Option<_>>` for nullable settings) field per recognized setting, canonical-named — full field list in `data-model.md` §2.1. Absent = `None` (FR-038). Plus `extra: HashMap<String, serde_json::Value>` for retained unknown keys (research R2) and the `extra_as::<T>()` method. All fields are `pub`. |
-| `ParseOptions` | struct, `#[non_exhaustive]`, `Default` | `ssl_verify_fs_check: bool` (default `false`) — see `data-model.md` §6. |
+| `Config` | struct, `#[non_exhaustive]` | One `Option<_>` (or `Option<Option<_>>` for nullable settings) field per recognized setting, canonical-named (conda's loader name — e.g. `auto_activate`, not `auto_activate_base`) — full field list in `data-model.md` §2.1. Absent = `None`, uniformly, with no defaulting layer of any kind (FR-038). Plus `extra: HashMap<String, serde_json::Value>` for retained unknown keys (research R2) and the `extra_as::<T>()` method. All fields are `pub`. |
+| `ParseOptions` | struct, `#[non_exhaustive]`, `Default` | `ssl_verify_fs_check: bool` (default `false` = no filesystem access, `ssl_verify` paths accepted unverified) — see `data-model.md` §6. |
 | `ValidationReport` | struct | Owns the accumulated entries; `impl std::error::Error + Display + Serialize`. `entries()` returns `&[ErrorEntry]` (FR-037). |
 | `ErrorEntry` | struct | Public fields `location`, `kind`, `message`, `input`, `involved` (FR-033/037). `Serialize`. |
 | `ErrorKind` | enum, `#[non_exhaustive]` | Stable serde strings (see `error-report.schema.json`). Consumers branch on this (FR-037). |
-| `Location`, `PathSegment` | enum | Nested-location addressing (FR-033). |
+| `Location`, `PathSegment` | enum | Nested-location addressing (FR-033); struct variants, internally tagged as `"type"` on the wire to match `error-report.schema.json`. |
 | `ChannelPriority`, `PathConflict`, `SafetyChecks`, `SatSolver`, `ListField` | enum, `#[non_exhaustive]` | Closed-vocabulary enums (FR-010/016/022). |
 | `BoolOrInt`, `SslVerify`, `ChannelSetting` | enum/struct | Mixed-shape setting values — `data-model.md` §3. |
 
@@ -129,11 +130,11 @@ match condarc::parse(&text) {
 fn describe(loc: &condarc::Location) -> String {
     match loc {
         condarc::Location::Root => "<root>".to_string(),
-        condarc::Location::Setting(name) => name.clone(),
+        condarc::Location::Setting { setting } => setting.clone(),
         condarc::Location::Nested { setting, path } => {
             format!("{setting}{}", path.iter().map(|s| match s {
-                condarc::PathSegment::Index(i) => format!("[{i}]"),
-                condarc::PathSegment::Key(k) => format!(".{k}"),
+                condarc::PathSegment::Index { index } => format!("[{index}]"),
+                condarc::PathSegment::Key { key } => format!(".{key}"),
             }).collect::<String>())
         }
     }
@@ -177,10 +178,12 @@ fn wants_prompt_confirmation(cfg: &condarc::Config) -> bool {
 ### 4. Opting into the real `ssl_verify` filesystem check (a caller's own runtime config)
 
 ```rust
-// GEN-23's CLI wants exact conda runtime fidelity in production, but its
-// own test suite wants the hermetic default (no filesystem dependency).
-// Both are the same compiled `condarc`; the choice is a plain call-site
-// value, never a build-time switch (research R6).
+// GEN-23's CLI wants exact conda runtime fidelity in production (reject an
+// ssl_verify path that doesn't exist), but its own test suite wants the
+// side-effect-free default (no filesystem dependency; an ssl_verify path is
+// accepted unverified). Both are the same compiled `condarc`; the choice is
+// a plain call-site value, never a build-time switch (research R6). The
+// conformance harness passes `true` for the same reason GEN-23 does.
 fn parse_for_runtime(yaml: &str) -> Result<condarc::Config, condarc::ValidationReport> {
     condarc::parse_with_options(yaml, condarc::ParseOptions { ssl_verify_fs_check: true, ..Default::default() })
 }
@@ -244,11 +247,12 @@ rejecting a generic `Config<Extra>` type parameter).
 ## Adapter (test-only — not part of the published crate's surface)
 
 `to_expected_json(&Config) -> serde_json::Value` renders the internal representation into the
-`conformance/condarc/expected/*.json` shape. Per research R9, this lives in the **test crate**
-(`crates/condarc/tests/conformance_support.rs`), not `crates/condarc/src/`, and is documented
-separately in `adapter-output.md`. It is not part of this public-API contract because no real
-caller (GEN-23, a future publication) needs conda's exact wire shape — they consume typed `Config`
-fields directly (§ "Using the typed values" above).
+`conformance/condarc/expected/*.json` shape. Per research R9/R10 it lives in the **conformance
+harness's own test target** (`tests/support/adapter.rs`, used via `mod support;` from
+`tests/condarc_conformance.rs`) — not in `crates/condarc/src/`, and not in `crates/condarc/tests/`
+(unreachable from the harness) — and is documented separately in `adapter-output.md`. It is not part of
+this public-API contract because no real caller (GEN-23, a future publication) needs conda's exact wire
+shape — they consume typed `Config` fields directly (§ "Using the typed values" above).
 
 ## Guarantees (invariants callers may rely on)
 
@@ -257,14 +261,17 @@ fields directly (§ "Using the typed values" above).
    (including entry order — research R7) (Constitution IX).
 3. **Complete errors**: a rejected document reports *all* independent problems, except the two
    non-accumulable single-entry classes `YamlSyntax`/`RootShape` (FR-030/031/032).
-4. **Absent means absent**: no defaults table; a field is `None` iff the setting was not present
-   in the document (FR-038). Callers apply their own default policy explicitly (§3 above).
+4. **Absent means absent**: no defaults table, no effective-value layer, and no synthesized `false`
+   for off-state booleans; a field is `None` iff the setting was not present in the document
+   (FR-038). Callers apply their own default policy explicitly (§3 above).
 5. **Silent unknowns**: unknown top-level keys never cause an error (FR-036); they are retained in
    `Config::extra: HashMap<String, serde_json::Value>` — a neutral, parser-independent type — for
    inspection or `extra_as::<T>()` deserialization (research R2).
-6. **No implicit I/O**: `parse()` never touches the filesystem/network/env; `parse_with_options()`
-   touches the filesystem only for `ssl_verify` path existence, and only when the caller explicitly
-   sets `ParseOptions.ssl_verify_fs_check = true` (FR-002/024, research R6).
+6. **No implicit I/O**: there is no path-taking entry point at all (FR-001 — callers read the file,
+   stdin, or anything else themselves), and `parse()` never touches the filesystem/network/env, so
+   its result is a pure function of the input string. `parse_with_options()` touches the filesystem
+   only for `ssl_verify` path existence, and only when the caller explicitly sets
+   `ParseOptions.ssl_verify_fs_check = true` (FR-002/024, research R6).
 
 ## Stability / SemVer notes
 

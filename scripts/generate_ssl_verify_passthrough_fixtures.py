@@ -65,15 +65,30 @@ def ssl_verify_validation(value: str) -> str | Literal[True]:
 (`exists` = `os.path.exists`.)
 
 Portability note: the "an existing path is accepted" candidates below
-deliberately use `"."` (the current working directory), never an
-OS-specific absolute path -- `os.path.exists(".")` is `True` on every
-platform this repo's CI matrix runs on (Linux/macOS/Windows), unlike e.g.
-`"/etc/hosts"` or `"/"`, which aren't portable in the same way. This
-keeps the battery hermetic despite `ssl_verify_validation`'s check being
-inherently filesystem-dependent (docs/condarc_research.md §3's "not
-something a portable, hermetic conformance suite can encode" caveat is
-about the *general* case of asserting arbitrary real-path acceptance,
-not this specific always-true special case).
+deliberately use relative paths that exist on every platform this repo's
+CI matrix runs on (Linux/macOS/Windows) -- `".."` and `"./"` -- never an
+OS-specific absolute path like `"/etc/hosts"` or `"/"`. This keeps the
+battery hermetic despite `ssl_verify_validation`'s check being inherently
+filesystem-dependent (docs/condarc_research.md §3's "not something a
+portable, hermetic conformance suite can encode" caveat is about the
+*general* case of asserting arbitrary real-path acceptance, not these
+always-true special cases).
+
+**Why `"."` alone does NOT exercise the path branch** (and why `".."` is
+here): `boolify()`'s internal probe string is
+`str(value).strip().lower().replace(".", "", 1)` -- it removes the *first*
+dot before any token comparison. So `"."` becomes `""`, and `""` is a
+`BOOLISH_FALSE` token, meaning `ssl_verify: "."` resolves to the plain
+boolean `False` and never reaches the passthrough branch at all, let
+alone `os.path.exists()` (the checked-in
+`conformance/condarc/expected/ssl_verify_passthrough_accept_existing_path_current_dir.json`
+records exactly that: `{"ssl_verify": false}`, not `"."`). `".."` and
+`"./"` survive the same probe (`".."` -> `"."`, `"./"` -> `"/"`; neither
+is numeric, boolish, nor `complex()`-parseable), so they *do* pass
+through as strings and *do* get filesystem-checked -- they are the
+candidates that actually prove the accepting side of the
+`os.path.exists()` branch. The `"."`/`" . "` candidates are kept
+deliberately, as the fixtures documenting the dot-strip quirk itself.
 
 Every candidate is still verified empirically against a real `conda`
 installation before a fixture is written, for the same self-correcting
@@ -125,15 +140,28 @@ CANDIDATES: list[tuple[str, object]] = [
     # this still resolves to the exact string "truststore" by the time
     # ssl_verify_validation sees it.
     ("truststore_whitespace_padded", "  truststore\t"),
-    # "." (the current working directory) always exists, on every OS --
-    # a passthrough string that satisfies ssl_verify_validation's
-    # os.path.exists() branch without depending on any OS-specific
-    # absolute path. Exercises the "directory containing certificates"
-    # half of the validator's accepted shapes.
+    # "." (the current working directory) LOOKS like the obvious
+    # existing-path candidate, but boolify()'s
+    # `.replace(".", "", 1)` probe turns it into "", a BOOLISH_FALSE
+    # token -- so this actually loads as the boolean False and never
+    # reaches ssl_verify_validation's os.path.exists() branch (see the
+    # module docstring). Kept as the fixture that documents that quirk;
+    # see the parent-dir candidates below for the ones that really do
+    # exercise the filesystem check.
     ("existing_path_current_dir", "."),
     # Same idea, whitespace-padded -- typify()'s outer .strip() reduces
-    # this to "." before boolify()/ssl_verify_validation ever see it.
+    # this to "." before boolify() runs, so it also loads as False.
     ("existing_path_whitespace_padded", " . "),
+    # ".." survives boolify() (probe string "." is neither numeric, nor a
+    # boolish/null token, nor complex()-parseable), so it passes through
+    # as a real string and IS filesystem-checked -- and the parent of the
+    # process's working directory exists on every platform. This is the
+    # candidate that actually proves the accepting half of
+    # ssl_verify_validation's os.path.exists() branch.
+    ("existing_path_parent_dir", ".."),
+    # Same, via a trailing separator: probe string "/" is likewise not a
+    # boolish token, so "./" passes through and is checked as a path.
+    ("existing_path_dot_slash", "./"),
 ]
 
 CONDA_CHECK_SCRIPT = """

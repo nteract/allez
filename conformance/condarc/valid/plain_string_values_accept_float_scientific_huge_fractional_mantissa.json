@@ -1,0 +1,10 @@
+{
+  "console": 1.5e+300,
+  "default_activation_env": 1.5e+300,
+  "env_prompt": 1.5e+300,
+  "error_upload_url": 1.5e+300,
+  "root_prefix": 1.5e+300,
+  "solver": 1.5e+300,
+  "subdir": 1.5e+300,
+  "target_prefix_override": 1.5e+300
+}

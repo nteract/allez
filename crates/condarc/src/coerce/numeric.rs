@@ -171,7 +171,6 @@ fn parse_float_literal(cleaned: &str) -> Option<f64> {
     cleaned.parse::<f64>().ok()
 }
 
-
 /// `local_repodata_ttl`'s `(bool, int)` narrower boolish vocabulary (FR-020,
 /// docs/condarc_research.md §8 items 6/11): `typify_str_no_hint`'s hand-rolled regex table, a
 /// *strict subset* of `boolify()`'s own `BOOLISH_TRUE`/`BOOLISH_FALSE` — no single-letter `y`/`n`,

@@ -1,0 +1,10 @@
+{
+  "console": -1e+16,
+  "default_activation_env": -1e+16,
+  "env_prompt": -1e+16,
+  "error_upload_url": -1e+16,
+  "root_prefix": -1e+16,
+  "solver": -1e+16,
+  "subdir": -1e+16,
+  "target_prefix_override": -1e+16
+}

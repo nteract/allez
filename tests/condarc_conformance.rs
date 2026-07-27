@@ -61,7 +61,15 @@
 //!     cannot represent them) in
 //!     `support::adapter::CRATE_A1_DIVERGENCES` and are asserted
 //!     *rejected* by this checker specifically, even though conda/openapi
-//!     still accept them -- see `valid_condarc_is_accepted`.
+//!     still accept them -- see `valid_condarc_is_accepted`. A further
+//!     `valid/` fixture (a Unicode-decimal-digit `default_python` value,
+//!     spec Assumption A4) doesn't get this assert-and-fail-loudly
+//!     treatment: since *both* this checker and `OpenApi` lack the
+//!     capability to agree with conda here (Rust's numeric parsers, and
+//!     the openapi schema's regex patterns, are both ASCII-only -- see
+//!     that schema's own `CondaDefaultPython` description), it's instead
+//!     named in `CONDA_ONLY_FIXTURES` below, the same "checker doesn't
+//!     apply at all" shape as `RUST_ONLY_FIXTURES`.
 //!   - **openapi**: validates against the `Condarc` schema nested under
 //!     `components.schemas.Condarc` in `docs/condarc_openapi.json`
 //!     (an OpenAPI 3.1 document; only that one subschema is used as the
@@ -197,15 +205,19 @@ enum CheckOutcome {
 // Hardcoded per-fixture checker applicability (docs/condarc_research.md item 21)
 // ---------------------------------------------------------------------
 //
-// Two fixture-name lists, checked *before* any checker runs (`Checker::check` below) rather than
-// by running every checker and then inspecting/asserting on the outcome afterward. Each list
-// says outright which checker(s) a fixture simply doesn't apply to; there is no live behavior to
-// probe for those checkers on that fixture, so none is probed.
+// Three fixture-name lists, checked *before* any checker runs (`Checker::check` below) rather
+// than by running every checker and then inspecting/asserting on the outcome afterward. Each
+// list says outright which checker(s) a fixture simply doesn't apply to; there is no live
+// behavior to probe for those checkers on that fixture, so none is probed.
 //
-// Both lists exist for exactly one reason: `yaml-rust2` (this crate's YAML dependency) enforces
+// The first two lists exist for one reason: `yaml-rust2` (this crate's YAML dependency) enforces
 // no equivalent to the YAML 1.1 "simple key" 1024-character scanner limit that both real conda's
 // YAML library (`ruamel.yaml`) and `docs/condarc_openapi.json`'s schema (which deliberately
-// copies conda's limit as `propertyNames.maxLength: 1022`) enforce.
+// copies conda's limit as `propertyNames.maxLength: 1022`) enforce. The third exists for a
+// different reason: spec Assumption A4 (Python's `int()`/`float()` accept any Unicode decimal
+// digit; Rust's numeric parsers -- and `docs/condarc_openapi.json`'s regex patterns, deliberately
+// written to mirror the crate's ASCII-only behavior rather than reimplement conda's
+// Unicode-tolerant one, see `CondaDefaultPython`'s own description -- are both ASCII-only).
 
 /// `invalid/` fixture *file stems* for which the `Crate` checker is skipped entirely: these use
 /// a 1023-character raw key, one character past conda's/the schema's 1024-character limit, so
@@ -231,6 +243,15 @@ const RUST_ONLY_FIXTURES: &[&str] = &[
     "dict_of_strings_values_accept_key_exceeds_yaml_simple_key_length_limit",
 ];
 
+/// `valid/` fixture *file stems* for which the `Crate` and `OpenApi` checkers are both skipped
+/// entirely: this fixture (a Unicode-decimal-digit `default_python` value, e.g. the Arabic-Indic
+/// digits in `"٣.٩"`) pins spec Assumption A4 -- real conda accepts it (Python's `float()`
+/// accepts any Unicode decimal digit), but the `Crate` checker's numeric parsing and the
+/// `OpenApi` checker's `default_python` regex pattern are both deliberately ASCII-only, so
+/// neither has a value/verdict worth asserting against conda's here -- only the `Conda` checker
+/// runs normally on it, including its usual `expected/*.json` re-derivation check.
+const CONDA_ONLY_FIXTURES: &[&str] = &["default_python_accept_unicode_arabic_indic_digits"];
+
 fn fixture_stem(path: &Path) -> &str {
     path.file_stem().and_then(|s| s.to_str()).unwrap_or("")
 }
@@ -242,8 +263,13 @@ fn fixture_stem(path: &Path) -> &str {
 fn is_fixture_skipped_for_checker(checker: Checker, path: &Path) -> bool {
     let stem = fixture_stem(path);
     match checker {
-        Checker::Crate => CRATE_SKIPPED_FIXTURES.contains(&stem),
-        Checker::Conda | Checker::OpenApi => RUST_ONLY_FIXTURES.contains(&stem),
+        Checker::Crate => {
+            CRATE_SKIPPED_FIXTURES.contains(&stem) || CONDA_ONLY_FIXTURES.contains(&stem)
+        }
+        Checker::Conda => RUST_ONLY_FIXTURES.contains(&stem),
+        Checker::OpenApi => {
+            RUST_ONLY_FIXTURES.contains(&stem) || CONDA_ONLY_FIXTURES.contains(&stem)
+        }
     }
 }
 
@@ -268,7 +294,8 @@ impl Checker {
         }
         if is_fixture_skipped_for_checker(self, path) {
             return CheckOutcome::Skipped(
-                "not applicable to this fixture (see CRATE_SKIPPED_FIXTURES/RUST_ONLY_FIXTURES)"
+                "not applicable to this fixture (see \
+                 CRATE_SKIPPED_FIXTURES/RUST_ONLY_FIXTURES/CONDA_ONLY_FIXTURES)"
                     .to_string(),
             );
         }

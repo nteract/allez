@@ -62,15 +62,25 @@ so the batteries below pin it down explicitly (GEN-36 spec FR-026):
     rejected.
   - `float()` accepts any Unicode decimal digit, so conda also accepts
     e.g. `"\u0663.\u0669"` (Arabic-Indic three-point-nine), verified
-    empirically against conda 26.5.3. **No fixture is generated for
-    this**: Rust's `f64::from_str` is ASCII-only, so the GEN-36 crate
-    deliberately does not reproduce it (documented as language-
-    difference simplification A4 in
-    `specs/GEN-36_condarc_parser_library/spec.md`), and a fixture that
-    conda accepts while the crate rejects cannot live in either
-    `valid/` or `invalid/` without a per-checker divergence mechanism
-    the harness does not have. It is recorded here (and in the spec)
-    rather than encoded as a conformance case.
+    empirically against conda 26.5.3. This *is* encoded as a
+    conformance case (`default_python_accept_unicode_arabic_indic_
+    digits.json`, in the accept battery below), even though neither
+    the GEN-36 crate nor `docs/condarc_openapi.json`'s schema
+    reproduces it: Rust's `f64::from_str` is ASCII-only (documented as
+    language-difference simplification A4 in
+    `specs/GEN-36_condarc_parser_library/spec.md`), and the openapi
+    schema's `default_python` pattern was deliberately written with an
+    explicit `[0-9]` character class to match that same ASCII-only
+    behavior rather than conda's true Unicode-tolerant one (see that
+    schema's own property description). The fixture stays in
+    `valid/` (conda really does accept it), and
+    `tests/support/adapter.rs`'s `A4_DIVERGENCES` list /
+    `is_a4_divergence()` tells `tests/condarc_conformance.rs` to assert
+    that *both* the `Crate` and `OpenApi` checkers reject it instead of
+    silently skipping or wrongly demanding acceptance -- see that
+    module's docs for the general per-checker-divergence mechanism this
+    reuses (originally built for spec Assumption A1's bignum
+    fixtures).
   - An exponent can also push an otherwise-well-shaped value *out* of
     range: `"3.5e-1"` passes the length/dot checks but
     `float("3.5e-1") == 0.35 < 2.0`, so it is rejected by the range
@@ -196,6 +206,15 @@ ACCEPT_CANDIDATES: list[tuple[str, object]] = [
     # A JSON float (not a JSON string) -- str(2.0) == "2.0", which is
     # both length- and range-valid once stringified.
     ("float_2_0_stringifies_in_range", 2.0),
+    # Arabic-Indic Unicode decimal digits (U+0663 THREE, U+0669 NINE) --
+    # float() accepts any Unicode decimal digit, so this is a real,
+    # verified-against-conda accept case, not a hypothetical one. See
+    # the module docstring: this fixture is a declared A4 divergence
+    # (tests/support/adapter.rs's A4_DIVERGENCES) -- both the `Crate`
+    # and `OpenApi` conformance checkers deliberately reject it (their
+    # ASCII-only numeric parsing/pattern), while conda and this `Conda`
+    # checker accept it.
+    ("unicode_arabic_indic_digits", "\u0663.\u0669"),
 ]
 
 # (slug, value) reject candidates.

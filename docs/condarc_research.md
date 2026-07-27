@@ -1417,14 +1417,131 @@ exactly the kind of full-fidelity detail worth keeping, not just "it passed."
     unchanged (defaulting is still never automatic), but
     `ParseOptions` now has an opt-in
     `null_sequence_map_defaults: bool` field (default `false`) — see
-    `model.rs`'s doc comment on it and `parse.rs`'s
-    `conda_sequence_map_default`/`apply_null_sequence_map_default` — that,
-    when enabled, resolves exactly this one narrow case (an *explicit*
-    `null`, never an absent key, and only for a `SequenceParameter`-/
-    `MapParameter`-typed setting) to conda's own class-level default
-    instead of leaving the field `None`. The conformance harness's
-    `Crate` checker enables it (parallel to `ssl_verify_fs_check`, spec
-    A3) since the corpus was generated from real conda, which
-    unconditionally exhibits this behavior — so all four affected
-    fixtures' adapter-output comparisons now pass exactly, with no
-    divergence list needed.
+     `model.rs`'s doc comment on it and `parse.rs`'s
+     `conda_sequence_map_default`/`apply_null_sequence_map_default` — that,
+     when enabled, resolves exactly this one narrow case (an *explicit*
+     `null`, never an absent key, and only for a `SequenceParameter`-/
+     `MapParameter`-typed setting) to conda's own class-level default
+     instead of leaving the field `None`. The conformance harness's
+     `Crate` checker enables it (parallel to `ssl_verify_fs_check`, spec
+     A3) since the corpus was generated from real conda, which
+     unconditionally exhibits this behavior — so all four affected
+     fixtures' adapter-output comparisons now pass exactly, with no
+     divergence list needed.
+23. **Spec Assumption A4 (ASCII-only numeric parsing) now has a real
+    conformance fixture, exercised via a generalized form of the
+    `CRATE_SKIPPED_FIXTURES`/`RUST_ONLY_FIXTURES` "checker doesn't apply
+    at all" mechanism (item 21)** — not the different `CRATE_A1_
+    DIVERGENCES` "declared divergence, asserted not suppressed"
+    mechanism (item 14/15) — **rather than being left undertested.**
+    `default_python`'s custom validator ultimately calls Python's
+    `float()`, which accepts **any** Unicode decimal digit (Unicode
+    category `Nd`), not just ASCII `0`-`9` — verified empirically
+    against conda 26.5.3: `default_python: "٣.٩"` (U+0663 ARABIC-INDIC
+    DIGIT THREE, U+0669 ARABIC-INDIC DIGIT NINE) loads successfully, and
+    `context.default_python` reads back as the literal,
+    un-transliterated string `"٣.٩"` — conda does not normalize the
+    digits to ASCII, it just accepts them as-is. Rust's `f64::from_str`
+    (and, by design, this crate's `default_python` validator, which
+    explicitly gates on `is_ascii_only()` before ever calling
+    `str::parse::<f64>()`) is ASCII-only, so the crate rejects the
+    identical value with a `semantic_validation` error.
+    `conformance/condarc/valid/
+    default_python_accept_unicode_arabic_indic_digits.json` pins exactly
+    this case.
+    - **Why the skip mechanism, not the assert-divergence mechanism**:
+      `CRATE_A1_DIVERGENCES` (item 14's bignum fixtures) exists for
+      cases where a checker's accept/reject *verdict itself* is the
+      thing under test, and is *expected* to disagree with conda's --
+      the whole point of that list is to keep proving the crate still
+      correctly *rejects* an out-of-range numeral, so a fixture that
+      quietly stopped diverging (started being wrongly accepted) fails
+      loudly. That shape doesn't fit here: this Unicode-digit case isn't
+      testing whether the `Crate`/`OpenApi` checkers correctly implement
+      some rejection rule of their own -- it's simply a case neither of
+      them has any way to agree with conda on at all, by construction
+      (see below). There's nothing checker-specific to keep proving
+      correct beyond "still ASCII-only", which the crate's/schema's own
+      unit-level tests already cover far more directly. Treating it as
+      a *skip* (this fixture "doesn't apply" to those two checkers, the
+      same shape as the pre-existing YAML simple-key-length gap) is
+      simpler and avoids growing a second assert-and-fail-loudly list
+      for what is really an "unsupported input shape" gap, not a
+      "verify the rejection still fires" gap.
+    - **Mechanism**: a third hardcoded list joins
+      `CRATE_SKIPPED_FIXTURES`/`RUST_ONLY_FIXTURES` in
+      `tests/condarc_conformance.rs`: `CONDA_ONLY_FIXTURES`, containing
+      this one fixture's stem. `is_fixture_skipped_for_checker` now
+      also skips the `Crate` checker (folded into the same match arm as
+      `CRATE_SKIPPED_FIXTURES`) and the `OpenApi` checker (folded into
+      the same arm as `RUST_ONLY_FIXTURES`) for any stem in
+      `CONDA_ONLY_FIXTURES` -- checked, like the other two lists,
+      *before* either checker ever runs, so no `condarc::parse` call
+      and no schema validation is attempted for this fixture at all.
+      Only the `Conda` checker runs normally on it, including the usual
+      `assert_conda_expected_representation` re-derivation check against
+      `conformance/condarc/expected/
+      default_python_accept_unicode_arabic_indic_digits.json` (generated
+      the same way as every other `expected/*.json`, via
+      `scripts/generate_zzz_condarc_expected_fixtures.py --fixture`,
+      and recording conda's real, un-transliterated
+      `{"default_python": "٣.٩"}`).
+    - **Both checkers being inapplicable is a coincidence of two
+      unrelated ASCII-only decisions, not one shared cause.** The
+      `Crate` checker's inapplicability is straightforward: Rust's
+      numeric parsers are ASCII-only (A4's actual "Decision" clause).
+      The `OpenApi` checker's inapplicability is a *separate* fact about
+      `docs/condarc_openapi.json`'s `default_python` regex pattern,
+      which was deliberately authored with an explicit `[0-9]`
+      character class (not `\d`) specifically to mirror the crate's
+      ASCII-only simplification rather than reimplement conda's true
+      Unicode-tolerant behavior (see that schema's own
+      `CondaDefaultPython` description).
+    - **There is no portable fix available on the `OpenApi` side
+      anyway, and this was verified empirically rather than assumed** --
+      worth recording even though the schema's own gap didn't end up
+      needing a divergence-list *assertion*. The obvious fix-the-regex
+      instinct — swap `[0-9]` for `\d`, or the more precise `\p{Nd}`
+      (Unicode's actual "decimal digit" general category, the exact set
+      `float()` accepts) — was tried directly against this repo's own
+      `jsonschema` crate (the same one `check_openapi` uses). Both
+      compile successfully but **neither matches** the Arabic-Indic
+      digits: this `jsonschema` crate's regex backend evidently compiles
+      `pattern` values in ECMA-262/JS-style *non-Unicode* mode
+      (confirmed by contrast: the bare `regex` and `fancy-regex` crates
+      *do* match `\d` against a Unicode digit by default — the
+      restriction is specific to how `jsonschema` compiles a schema's
+      `pattern` string, not a property of Rust regex engines in
+      general). This isn't an accident of this one crate's
+      implementation choice, either: JSON Schema's `pattern` keyword is
+      specified against ECMA-262 regex semantics for cross-
+      implementation portability, and ECMA-262's `\d`/`\p{Nd}` require
+      an explicit `u`/`v` regex *flag* to become Unicode-aware — flags
+      the `pattern` keyword has no syntax to express (a schema author
+      can write a pattern *string*, never a flag). So even a JSON Schema
+      implementation that *did* happily match `\d` against a Unicode
+      digit (as this repo's happens not to) would be making a
+      permissive choice the spec doesn't require any other
+      implementation to share — encoding "accept a Unicode decimal
+      digit" in `pattern` is not a solvable-with-the-right-regex
+      problem, it's a genuine capability gap in JSON Schema's regex
+      dialect itself.
+    - **Fixing the regex wouldn't remove the gap even if it worked,
+      since the crate itself is unaffected either way.** The crate's own
+      ASCII-only decision is a deliberate Rust-side simplification
+      independent of the schema — changing only the schema's pattern
+      would just turn "both `Crate` and `OpenApi` are inapplicable" into
+      "only `Crate` is inapplicable" (now needing the assert-divergence
+      mechanism after all, just for one checker instead of two), and
+      would make the schema diverge from the crate it's expressly
+      designed to mirror (per its own description's stated intent). The
+      "both inapplicable, cleanly skipped" state recorded here is the
+      simpler, more honest one to pin down.
+    - **Scope note**: A4's own text also gives `repodata_threads: "٣"`
+      as a second example (a plain numeric key, not `default_python`).
+      That is the same underlying gap, but it is *not* separately
+      fixtured here — only `default_python`'s validator
+      (`scripts/generate_default_python_condarc_fixtures.py`) gained a
+      Unicode-digit case. A future contributor extending numeric-key
+      coverage (item 14) to the same Unicode-digit boundary should reuse
+      `CONDA_ONLY_FIXTURES` rather than inventing a fourth mechanism.

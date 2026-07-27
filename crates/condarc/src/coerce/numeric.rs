@@ -38,14 +38,14 @@ pub(crate) fn is_ascii_only(s: &str) -> bool {
 /// `int()`-equivalent parse of an underscore-stripped, ASCII-only numeral string: optional sign,
 /// ASCII digits only, no decimal point/exponent (FR-018 explicitly rejects those for integers).
 fn parse_int_literal(cleaned: &str) -> Option<i64> {
-    let (sign, digits) = match cleaned.strip_prefix('-') {
-        Some(rest) => (-1i64, rest),
-        None => (1i64, cleaned.strip_prefix('+').unwrap_or(cleaned)),
-    };
+    let digits = cleaned
+        .strip_prefix('-')
+        .or_else(|| cleaned.strip_prefix('+'))
+        .unwrap_or(cleaned);
     if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
         return None;
     }
-    digits.parse::<i64>().ok().map(|v| v * sign)
+    cleaned.parse::<i64>().ok()
 }
 
 /// `Int` — integer settings (FR-018): JSON booleans and numbers (floats truncated toward zero),
@@ -142,7 +142,18 @@ fn parse_float_literal(cleaned: &str) -> Option<f64> {
     if cleaned.is_empty() {
         return None;
     }
-    cleaned.parse::<f64>().ok()
+    let parsed = cleaned.parse::<f64>().ok()?;
+    if parsed.is_finite() {
+        return Some(parsed);
+    }
+
+    let token = cleaned.to_ascii_lowercase();
+    matches!(
+        token.as_str(),
+        "nan" | "+nan" | "-nan" | "inf" | "+inf" | "-inf" | "infinity" | "+infinity"
+            | "-infinity"
+    )
+    .then_some(parsed)
 }
 
 /// `local_repodata_ttl`'s `(bool, int)` narrower boolish vocabulary (FR-020,

@@ -9,7 +9,7 @@ use yaml_rust2::{Yaml, YamlLoader};
 use crate::catalog::{CATALOG, SemanticValidator, ValueKind};
 use crate::coerce::enums::EnumResult;
 use crate::coerce::{self, CoercionError, input_repr};
-use crate::error::{ErrorEntry, ErrorKind, InputRepr, Location, ValidationReport};
+use crate::error::{ErrorEntry, ErrorKind, InputRepr, Location, PathSegment, ValidationReport};
 use crate::model::{Config, ParseOptions};
 
 /// The internal, owned mirror of `yaml_rust2::Yaml`'s resolved-scalar-type tree (data-model.md
@@ -49,26 +49,54 @@ pub(crate) enum RawValue {
 
 /// Lower the document root into a [`RawValue`] tree, also collecting a `type_coercion` entry for
 /// every non-string mapping key encountered anywhere in the document (FR-007b) instead of
-/// silently dropping it as the plain [`lower`] does. A dropped key's location is the nearest
-/// enclosing top-level key name as written (or [`Location::Root`] for a root-level offender) —
-/// data-model.md §1's "located at the enclosing setting" note; this runs *before* any
-/// canonical/alias catalog lookup, so the location is the key exactly as the document spelled it.
+/// silently dropping it as the plain [`lower`] does. A dropped key's location is
+/// [`Location::Root`] for a root-level offender, [`Location::Setting`] for one that's a direct
+/// child of a setting's own mapping value, or [`Location::Nested`] — carrying every list
+/// index/map key crossed on the way down — for one nested deeper still (FR-007b/FR-033); this
+/// runs *before* any canonical/alias catalog lookup, so the location is the key exactly as the
+/// document spelled it.
 pub(crate) fn lower_document(yaml: &Yaml) -> (RawValue, Vec<ErrorEntry>) {
     let mut entries = Vec::new();
-    let value = lower_tracking_dropped_keys(yaml, None, &mut entries);
+    let mut path = Vec::new();
+    let value = lower_tracking_dropped_keys(yaml, None, &mut path, &mut entries);
     (value, entries)
+}
+
+/// The location of a non-string key found under `enclosing_setting`, having crossed `path` (a
+/// list index/map key per level) to get there — empty `path` collapses to [`Location::Setting`]
+/// rather than a [`Location::Nested`] with an empty path, matching [`build_error_entry`]'s same
+/// collapsing rule for coercion errors.
+fn dropped_key_location(enclosing_setting: Option<&str>, path: &[PathSegment]) -> Location {
+    match enclosing_setting {
+        None => Location::Root,
+        Some(setting) if path.is_empty() => Location::Setting {
+            setting: setting.to_string(),
+        },
+        Some(setting) => Location::Nested {
+            setting: setting.to_string(),
+            path: path.to_vec(),
+        },
+    }
 }
 
 fn lower_tracking_dropped_keys(
     yaml: &Yaml,
     enclosing_setting: Option<&str>,
+    path: &mut Vec<PathSegment>,
     entries: &mut Vec<ErrorEntry>,
 ) -> RawValue {
     match yaml {
         Yaml::Array(items) => RawValue::Seq(
             items
                 .iter()
-                .map(|item| lower_tracking_dropped_keys(item, enclosing_setting, entries))
+                .enumerate()
+                .map(|(index, item)| {
+                    path.push(PathSegment::Index { index });
+                    let lowered =
+                        lower_tracking_dropped_keys(item, enclosing_setting, path, entries);
+                    path.pop();
+                    lowered
+                })
                 .collect(),
         ),
         Yaml::Hash(hash) => {
@@ -77,23 +105,27 @@ fn lower_tracking_dropped_keys(
                 match key {
                     Yaml::String(key_str) => {
                         // The first string key we descend through becomes the "enclosing
-                        // setting" for everything nested under it; deeper non-string keys keep
-                        // attributing to that same top-level name (data-model.md §1).
+                        // setting" for everything nested under it (data-model.md §1); every
+                        // string key crossed *after* that point is instead one more path
+                        // segment (FR-007b/FR-033), not a new setting name.
+                        let already_under_a_setting = enclosing_setting.is_some();
                         let nested_context = enclosing_setting.or(Some(key_str.as_str()));
+                        if already_under_a_setting {
+                            path.push(PathSegment::Key {
+                                key: key_str.clone(),
+                            });
+                        }
                         map.insert(
                             key_str.clone(),
-                            lower_tracking_dropped_keys(value, nested_context, entries),
+                            lower_tracking_dropped_keys(value, nested_context, path, entries),
                         );
+                        if already_under_a_setting {
+                            path.pop();
+                        }
                     }
                     non_string_key => {
-                        let location = match enclosing_setting {
-                            Some(setting) => Location::Setting {
-                                setting: setting.to_string(),
-                            },
-                            None => Location::Root,
-                        };
                         entries.push(ErrorEntry {
-                            location,
+                            location: dropped_key_location(enclosing_setting, path),
                             kind: ErrorKind::TypeCoercion,
                             message: "mapping key is not a string and was dropped".to_string(),
                             input: input_repr(&lower(non_string_key)),
@@ -774,5 +806,64 @@ mod tests {
         // Zero documents (empty input) is handled by the caller (FR-005); `lower` itself only
         // ever receives one already-selected `Yaml` value.
         assert_eq!(lower(&Yaml::Null), RawValue::Null);
+    }
+
+    // -- Location precision for dropped non-string keys (FR-007b/FR-033) --------------------
+
+    #[test]
+    fn root_level_non_string_key_reports_root_location() {
+        let yaml = load_one("1: bad\nfoo: bar");
+        let (_, entries) = lower_document(&yaml);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].location, Location::Root);
+    }
+
+    #[test]
+    fn non_string_key_directly_under_a_setting_reports_setting_location() {
+        // The offender is a direct child of the setting's own mapping value, i.e. no
+        // intermediate list index or map key was crossed on the way down.
+        let yaml = load_one("channel_settings:\n  1: bad\n  channel: good\n");
+        let (_, entries) = lower_document(&yaml);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].location,
+            Location::Setting {
+                setting: "channel_settings".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn non_string_key_in_a_sequence_of_maps_reports_the_index_in_the_path() {
+        // FR-007b/FR-033: the offending nested path (including the list index) must be
+        // preserved, not collapsed to the enclosing setting alone.
+        let yaml = load_one("channel_settings:\n  - channel: good\n  - 1: bad\n");
+        let (_, entries) = lower_document(&yaml);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].location,
+            Location::Nested {
+                setting: "channel_settings".to_string(),
+                path: vec![crate::error::PathSegment::Index { index: 1 }],
+            }
+        );
+    }
+
+    #[test]
+    fn non_string_key_nested_inside_a_map_reports_the_key_in_the_path() {
+        // Same requirement, but for a nested-map (not sequence) offender: a map value nested
+        // one level under the setting's own map key.
+        let yaml = load_one("custom_channels:\n  a:\n    1: bad\n    ok: fine\n");
+        let (_, entries) = lower_document(&yaml);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].location,
+            Location::Nested {
+                setting: "custom_channels".to_string(),
+                path: vec![crate::error::PathSegment::Key {
+                    key: "a".to_string()
+                }],
+            }
+        );
     }
 }

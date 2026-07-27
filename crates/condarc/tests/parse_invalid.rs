@@ -2,7 +2,7 @@
 //! type-invalid `.condarc` text to `condarc::parse` produces a structured, never-panicking
 //! `ValidationReport`.
 
-use condarc::{ErrorKind, Location};
+use condarc::{ErrorKind, Location, PathSegment};
 
 /// Scenario 1: `channel_alias` with no URL scheme is rejected with a `semantic_validation` entry
 /// located at `channel_alias`, carrying the offending value.
@@ -177,11 +177,11 @@ fn multiple_root_level_non_string_keys_each_produce_their_own_entry() {
     }
 }
 
-/// A non-string key nested inside a specific setting's value (here, one `channel_settings` list
-/// element) is located at that enclosing setting, not at `Root` — and the rest of that element is
-/// still parsed (the sibling `channel` key survives).
+/// A non-string key nested inside a `channel_settings` list element carries the offending
+/// list index in its location's path (FR-007b/FR-033) — the enclosing setting name alone is not
+/// enough to find a deeply-nested offender.
 #[test]
-fn nested_non_string_key_is_located_at_the_enclosing_setting() {
+fn nested_non_string_key_in_a_sequence_element_carries_the_index_in_its_path() {
     let yaml = "channel_settings:\n  - 1: x\n    channel: y\n";
     let report = condarc::parse(yaml).expect_err("non-string nested key rejected");
 
@@ -189,8 +189,29 @@ fn nested_non_string_key_is_located_at_the_enclosing_setting() {
     assert_eq!(report.entries()[0].kind, ErrorKind::TypeCoercion);
     assert_eq!(
         report.entries()[0].location,
+        Location::Nested {
+            setting: "channel_settings".to_string(),
+            path: vec![PathSegment::Index { index: 0 }],
+        }
+    );
+}
+
+/// A non-string key that's a *direct* child of the setting's own mapping value (no list index
+/// or nested map key crossed on the way down) still collapses to `Location::Setting`, not a
+/// `Location::Nested` with an empty path — matching how coercion errors report the same case.
+/// Uses a key outside `CATALOG` so the shape mismatch this creates (a map where a real setting
+/// would expect a different shape) doesn't itself add a second, unrelated entry.
+#[test]
+fn non_string_key_directly_under_a_setting_is_located_at_the_setting_with_no_nested_path() {
+    let yaml = "some_unknown_setting:\n  1: x\n  channel: y\n";
+    let report = condarc::parse(yaml).expect_err("non-string nested key rejected");
+
+    assert_eq!(report.entries().len(), 1);
+    assert_eq!(report.entries()[0].kind, ErrorKind::TypeCoercion);
+    assert_eq!(
+        report.entries()[0].location,
         Location::Setting {
-            setting: "channel_settings".to_string()
+            setting: "some_unknown_setting".to_string()
         }
     );
 }

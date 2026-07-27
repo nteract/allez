@@ -185,7 +185,8 @@ fn wants_prompt_confirmation(cfg: &condarc::Config) -> bool {
 // a plain call-site value, never a build-time switch (research R6). The
 // conformance harness passes `true` for the same reason GEN-23 does.
 fn parse_for_runtime(yaml: &str) -> Result<condarc::Config, condarc::ValidationReport> {
-    condarc::parse_with_options(yaml, condarc::ParseOptions { ssl_verify_fs_check: true, ..Default::default() })
+    let options = condarc::ParseOptions::default().with_ssl_verify_fs_check(true);
+    condarc::parse_with_options(yaml, options)
 }
 
 #[cfg(test)]

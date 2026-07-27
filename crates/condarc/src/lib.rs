@@ -31,6 +31,17 @@ pub use model::{
 /// # Errors
 /// Returns `Err(ValidationReport)` on YAML syntax errors, non-mapping roots, or any accumulated
 /// per-setting / alias / cross-field validation failure.
+///
+/// # Examples
+///
+/// ```
+/// let config = condarc::parse("channels: [conda-forge, defaults]")?;
+/// assert_eq!(
+///     config.channels,
+///     Some(vec!["conda-forge".to_string(), "defaults".to_string()])
+/// );
+/// # Ok::<(), condarc::ValidationReport>(())
+/// ```
 pub fn parse(yaml: &str) -> Result<Config, ValidationReport> {
     parse_with_options(yaml, ParseOptions::default())
 }
@@ -42,6 +53,15 @@ pub fn parse(yaml: &str) -> Result<Config, ValidationReport> {
 ///
 /// # Errors
 /// Same failure modes as [`parse`].
+///
+/// # Examples
+///
+/// ```
+/// let options = condarc::ParseOptions::default().with_ssl_verify_fs_check(true);
+/// let config = condarc::parse_with_options("ssl_verify: ./", options)?;
+/// assert_eq!(config.ssl_verify, Some(condarc::SslVerify::Path("./".to_string())));
+/// # Ok::<(), condarc::ValidationReport>(())
+/// ```
 pub fn parse_with_options(yaml: &str, options: ParseOptions) -> Result<Config, ValidationReport> {
     parse::parse_document(yaml, &options)
 }

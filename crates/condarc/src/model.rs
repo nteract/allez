@@ -208,6 +208,20 @@ impl Config {
     /// Returns `serde_json::Error` if `T`'s shape doesn't match the
     /// retained values (e.g. a declared field's JSON value has the wrong
     /// type for `T`'s corresponding field).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #[derive(serde::Deserialize)]
+    /// struct ExtraConfig {
+    ///     custom_key: String,
+    /// }
+    ///
+    /// let config = condarc::parse("custom_key: value")?;
+    /// let extra: ExtraConfig = config.extra_as()?;
+    /// assert_eq!(extra.custom_key, "value");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn extra_as<T: serde::de::DeserializeOwned>(&self) -> Result<T, serde_json::Error> {
         let obj = serde_json::Value::Object(
             self.extra
@@ -341,7 +355,7 @@ pub struct ParseOptions {
     /// Opt into conda's own class-level default for an explicit YAML `null` on a
     /// `SequenceParameter`- or `MapParameter`-typed setting (`channels`, `custom_channels`,
     /// `channel_settings`, and similar list-/dict-shaped settings — data-model.md §4 marks each
-    /// one's [`crate::catalog::ValueKind`]).
+    /// one's internal value kind).
     ///
     /// Default `false`: an explicit top-level `null` for one of these settings is treated
     /// identically to that key being entirely absent from the document (FR-038's "no
@@ -372,6 +386,13 @@ impl ParseOptions {
     /// `ParseOptions::default().with_ssl_verify_fs_check(true)` rather than a struct literal.
     /// Adding a future option field only needs a new builder method here, never a breaking
     /// change to this one (Constitution VI's "adding an option field is MINOR").
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let options = condarc::ParseOptions::default().with_ssl_verify_fs_check(true);
+    /// assert!(options.ssl_verify_fs_check);
+    /// ```
     #[must_use]
     pub fn with_ssl_verify_fs_check(mut self, value: bool) -> Self {
         self.ssl_verify_fs_check = value;
@@ -380,6 +401,13 @@ impl ParseOptions {
 
     /// Builder-style setter for
     /// [`null_sequence_map_defaults`](Self::null_sequence_map_defaults).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let options = condarc::ParseOptions::default().with_null_sequence_map_defaults(true);
+    /// assert!(options.null_sequence_map_defaults);
+    /// ```
     #[must_use]
     pub fn with_null_sequence_map_defaults(mut self, value: bool) -> Self {
         self.null_sequence_map_defaults = value;

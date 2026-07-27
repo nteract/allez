@@ -150,8 +150,7 @@ fn parse_float_literal(cleaned: &str) -> Option<f64> {
     let token = cleaned.to_ascii_lowercase();
     matches!(
         token.as_str(),
-        "nan" | "+nan" | "-nan" | "inf" | "+inf" | "-inf" | "infinity" | "+infinity"
-            | "-infinity"
+        "nan" | "+nan" | "-nan" | "inf" | "+inf" | "-inf" | "infinity" | "+infinity" | "-infinity"
     )
     .then_some(parsed)
 }

@@ -93,19 +93,12 @@ fn lower_tracking_dropped_keys(
                                 key: key_str.clone(),
                             });
                         }
-                        let lowered = lower_tracking_dropped_keys(
-                            value,
-                            nested_context,
-                            path,
-                            entries,
-                        );
+                        let lowered =
+                            lower_tracking_dropped_keys(value, nested_context, path, entries);
                         if enclosing_setting.is_some() {
                             path.pop();
                         }
-                        map.insert(
-                            key_str.clone(),
-                            lowered,
-                        );
+                        map.insert(key_str.clone(), lowered);
                     }
                     non_string_key => {
                         let location = match enclosing_setting {

@@ -1,4 +1,4 @@
-.PHONY: help test conformance conformance-conda conformance-crate conformance-openapi regenerate-condarc-fixtures
+.PHONY: help test doc conformance conformance-conda conformance-crate conformance-openapi regenerate-condarc-fixtures
 
 CONFORMANCE_TEST := cargo test --test condarc_conformance --features conformance-tests
 CONFORMANCE_TEST_FILE := tests/condarc_conformance.rs
@@ -11,6 +11,16 @@ help: ## Show this help
 
 test: ## Run the full cargo test suite
 	cargo test --all
+
+# Scoped to `-p condarc --lib` rather than `--workspace`: the root `allez`
+# package is a bin-only crate (no lib.rs), so `cargo doc --workspace` mostly
+# just re-documents condarc anyway while adding noise (and a --no-deps run
+# would still try, and fail, to build docs for `allez`'s own dependency
+# graph). Targeting the condarc lib directly checks exactly what we care
+# about: that condarc's public API docs build cleanly. Mirrored by the `doc`
+# job in .github/workflows/ci.yml -- keep both in sync.
+doc: ## Build condarc's public API docs, failing on any rustdoc warning (e.g. broken intra-doc links)
+	RUSTDOCFLAGS='-D warnings' cargo doc -p condarc --lib --no-deps --locked
 
 # rstest's #[files(...)] attribute globs conformance/condarc/{valid,invalid}
 # at compile time (inside the proc-macro expansion), so cargo has no way to

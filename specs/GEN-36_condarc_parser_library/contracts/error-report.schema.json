@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/anaconda/allez/specs/GEN-36_condarc_parser_library/contracts/error-report.schema.json",
+  "title": "condarc ValidationReport",
+  "description": "Machine-readable JSON contract for condarc::ValidationReport (FR-034/FR-037). A list of independently-detected problems; never fewer than 1 entry when present. Serialized via serde on ValidationReport/ErrorEntry (data-model.md \u00a77). Versioned per Constitution III: a breaking change to this schema is a MAJOR bump.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0",
+      "description": "Schema version for this JSON contract, independent of the crate's own SemVer version."
+    },
+    "entries": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/errorEntry" },
+      "description": "Every independently-detected problem, in the deterministic order documented in research.md R7 (fixed catalog declaration order, not the input document's key order). Consumers MUST branch on kind + location, not array index."
+    }
+  },
+  "required": ["schema_version", "entries"],
+  "additionalProperties": false,
+  "$defs": {
+    "errorEntry": {
+      "type": "object",
+      "properties": {
+        "location": { "$ref": "#/$defs/location" },
+        "kind": { "$ref": "#/$defs/errorKind" },
+        "message": {
+          "type": "string",
+          "description": "Human-readable explanation (FR-033/FR-034 dual-interface)."
+        },
+        "input": { "$ref": "#/$defs/inputRepr" },
+        "involved": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "For alias_collision / cross_field entries: every setting name involved. Empty for all other kinds."
+        }
+      },
+      "required": ["location", "kind", "message", "input", "involved"],
+      "additionalProperties": false
+    },
+    "location": {
+      "description": "Where the problem is (FR-033). Discriminated by 'type'.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": { "type": { "const": "root" } },
+          "required": ["type"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "setting" },
+            "setting": { "type": "string" }
+          },
+          "required": ["type", "setting"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "nested" },
+            "setting": { "type": "string" },
+            "path": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/pathSegment" }
+            }
+          },
+          "required": ["type", "setting", "path"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "pathSegment": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": { "type": { "const": "index" }, "index": { "type": "integer", "minimum": 0 } },
+          "required": ["type", "index"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": { "type": { "const": "key" }, "key": { "type": "string" } },
+          "required": ["type", "key"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "errorKind": {
+      "type": "string",
+      "description": "Stable, machine-branchable problem category (FR-033/FR-037). Consumers MUST tolerate unrecognized future values (the Rust ErrorKind enum is #[non_exhaustive]).",
+      "enum": [
+        "yaml_syntax",
+        "root_shape",
+        "type_coercion",
+        "semantic_validation",
+        "alias_collision",
+        "cross_field"
+      ]
+    },
+    "inputRepr": {
+      "description": "The offending input value, or a description of it (FR-033). Discriminated by 'type'.",
+      "oneOf": [
+        { "type": "object", "properties": { "type": { "const": "bool" }, "value": { "type": "boolean" } }, "required": ["type", "value"], "additionalProperties": false },
+        { "type": "object", "properties": { "type": { "const": "int" }, "value": { "type": "integer" } }, "required": ["type", "value"], "additionalProperties": false },
+        { "type": "object", "properties": { "type": { "const": "float" }, "value": { "type": "number" } }, "required": ["type", "value"], "additionalProperties": false },
+        { "type": "object", "properties": { "type": { "const": "str" }, "value": { "type": "string" } }, "required": ["type", "value"], "additionalProperties": false },
+        { "type": "object", "properties": { "type": { "const": "null" } }, "required": ["type"], "additionalProperties": false },
+        { "type": "object", "properties": { "type": { "const": "seq" } }, "required": ["type"], "additionalProperties": false },
+        { "type": "object", "properties": { "type": { "const": "map" } }, "required": ["type"], "additionalProperties": false },
+        { "type": "object", "properties": { "type": { "const": "raw" }, "value": { "type": "string" } }, "required": ["type", "value"], "additionalProperties": false }
+      ]
+    }
+  },
+  "examples": [
+    {
+      "schema_version": "1.0.0",
+      "entries": [
+        {
+          "location": { "type": "setting", "setting": "channel_alias" },
+          "kind": "semantic_validation",
+          "message": "'channel_alias' must have a URL scheme (e.g. 'https://') unless empty",
+          "input": { "type": "str", "value": "conda.anaconda.org" },
+          "involved": []
+        },
+        {
+          "location": { "type": "setting", "setting": "remote_max_retries" },
+          "kind": "type_coercion",
+          "message": "'remote_max_retries' must be an integer in the i64 range",
+          "input": { "type": "raw", "value": "99999999999999999999999999999999" },
+          "involved": []
+        },
+        {
+          "location": { "type": "root" },
+          "kind": "cross_field",
+          "message": "'always_copy' and 'always_softlink' are mutually exclusive. Only one can be set to true.",
+          "input": { "type": "map" },
+          "involved": ["always_copy", "always_softlink"]
+        }
+      ]
+    },
+    {
+      "schema_version": "1.0.0",
+      "entries": [
+        {
+          "location": { "type": "root" },
+          "kind": "root_shape",
+          "message": "expected a YAML mapping (or null/empty) at the document root, found a sequence",
+          "input": { "type": "seq" },
+          "involved": []
+        }
+      ]
+    }
+  ]
+}

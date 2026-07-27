@@ -149,11 +149,34 @@ BOOL_COERCEABLE_TYPES = (int, bool, float, complex, list, set, dict, tuple)
    False`, `[] → False`, `[1,2,3] → True` (non-empty!), `{} → False`, `{"a":
    1} → True` (non-empty!).
 2. Else (value is a string not already caught above, or possibly `None` —
-   `NoneType` is *not* in `BOOL_COERCEABLE_TYPES`), stringify + lowercase +
-   strip, then strip a trailing/internal `.`-related numeric check: if
-   `val.isnumeric()` → `bool(float(val))` (so `"0"→False`, `"0.0"` — not
-   numeric per `str.isnumeric()`'s stricter rules — falls through instead;
-   `"2"→True`).
+   `NoneType` is *not* in `BOOL_COERCEABLE_TYPES`), build the probe string
+   `val = str(value).strip().lower().replace(".", "", 1)` — i.e. lowercase,
+   strip surrounding whitespace, and **delete the first `.` anywhere in the
+   string** — then: if `val.isnumeric()` → `bool(float(val))`.
+
+   That single dot-deletion is easy to skim past and has three separate
+   observable consequences, all of which a re-implementation must
+   reproduce:
+   - It is what makes *decimal* strings boolify at all: `"3.5".isnumeric()`
+     is `False`, but the probe string `"35"` is numeric, so `"3.5" → True`
+     (and `"0.0"` → probe `"00"` → `bool(float("00"))` → `False`). Note the
+     `float()` is applied to the **dot-stripped** probe, not the original —
+     harmless for truthiness (deleting one dot only rescales by a power of
+     ten, so zero-ness is preserved) but worth knowing.
+   - It makes the bare string `"."` **false**: the probe is `""`, and `""`
+     is a `BOOLISH_FALSE` token (step 5). This is why `ssl_verify: "."`
+     loads as the boolean `False` and never reaches
+     `ssl_verify_validation`'s `os.path.exists()` branch at all — see
+     `conformance/condarc/expected/ssl_verify_passthrough_accept_existing_path_current_dir.json`,
+     which records `{"ssl_verify": false}`. (`".."` and `"./"`, whose probes
+     are `"."` and `"/"`, are *not* tokens and do pass through as strings —
+     those are the fixtures that genuinely exercise the path branch.)
+   - It makes a *dotted* boolish token still a token: `"yes."` → probe
+     `"yes"` → `True`, `"none."` → probe `"none"` → `False`.
+
+   `str.isnumeric()` also accepts non-ASCII Unicode digits (`"٣" → True`),
+   which the GEN-36 crate deliberately does not reproduce — see that spec's
+   assumption A4.
 3. `val in BOOLISH_TRUE` (`"true","yes","on","y"`, case-folded) → `True`.
 4. If `nullable` and `val in NULL_STRINGS` (`"none","~","null","\0"`) →
    `None`. (`str(None).lower()` is `"none"`, which is in `NULL_STRINGS` —
@@ -980,6 +1003,20 @@ exactly the kind of full-fidelity detail worth keeping, not just "it passed."
       `integer`, ...) risks silently truncating, wrapping, or erroring
       where real conda does neither; `numeric_values_accept_
       *_bignum_*` fixtures exist specifically to catch that divergence.
+      **Resolved in spec.md's Assumption A1**: this crate rejects the
+      `int` case (no representable value exists for an over-`i64`
+      numeral) but deliberately does *not* reject the `float` case —
+      `f64` overflowing an over-range numeral to `+-inf` is itself a
+      standard, universal IEEE-754 outcome (every conforming
+      double-precision implementation, Python's `float()` included,
+      agrees), so it is not treated as a "risk" worth guarding against
+      for floats the way integer wraparound would be. The isolated
+      `numeric_values_accept_float_only_string_scientific_overflow_
+      {positive,negative}` fixtures pin this directly, with no `int`-typed
+      key in the same document to confound the verdict (unlike the
+      shared `numeric_string_bignum_exceeds_f64_max_finite` fixture
+      above, whose overall divergence comes entirely from its `int`-typed
+      sibling keys).
     Four fixture batteries came out of this: `numeric_values_accept_*`
     (valid for all 13 keys at once), `numeric_values_accept_float_only_*`
     (valid for the 2 `float` keys only), `numeric_values_reject_*`
@@ -1033,3 +1070,492 @@ exactly the kind of full-fidelity detail worth keeping, not just "it passed."
       with a `serde_json` "number out of range" parse error on
       `numeric_values_accept_numeric_string_bignum_exceeds_f64_max_finite
       .json` before this fix.)
+16. **`boolify()`'s own docstring (`(int, bool, float, complex, list, set,
+    dict, tuple)` truthiness-coercion via `BOOL_COERCEABLE_TYPES`, §2.2) is
+    never actually *reached* for a `.condarc` YAML value when that value is
+    a list or mapping — it's a real behavior of `boolify()` called
+    *directly* elsewhere in conda's codebase (a CLI flag, an env var
+    string), but every one of this crate's four boolish `ValueKind`s
+    (`Bool`, `NullableBool`, `SslVerifyKind`/`ssl_verify`,
+    `BoolOrIntKind`/`local_repodata_ttl`) short-circuits *before*
+    `boolify()` for a list/dict raw value, via the exact same
+    `isiterable(value)`-before-`element_type` gate already documented for
+    the crash bugs in item 7 above.** Concretely: `LoadedParameter.
+    _typify_data_structure` checks `isiterable(value)` first; a YAML
+    list/dict for a scalar-shaped (`PrimitiveParameter`) setting takes the
+    "recurse into elements" branch (crashing on non-empty collections per
+    item 7, or degenerating to an empty `tuple`/`frozendict` for empty
+    ones) — `boolify()` is **never called** for that value at all, in
+    either case. So real conda's actual, observable behavior for e.g.
+    `override_channels_enabled: []` (or any of Categories A/B/C/D from
+    item 12) is a clean `InvalidTypeError: ... has type tuple. Valid
+    types: - bool[, ...]` for *every* one of these keys, regardless of
+    emptiness — not the truthiness coercion (`[] -> False`, `[1,2,3] ->
+    True`) that reading `boolify()`'s docstring in isolation would
+    suggest. Empirically confirmed via the real conda oracle for one key
+    from each category: `override_channels_enabled: []` (Category A),
+    `always_yes: []` (Category B), `ssl_verify: []` (Category C),
+    `local_repodata_ttl: []` (Category D) — all four raise
+    `InvalidTypeError`, matching `conformance/condarc/invalid/
+    boolish_values_reject_{array,object}_{empty,nonempty}.json` (four
+    fixtures; the per-key-exploded conformance harness had previously
+    masked the true scope of this bug across them: each fixture's JSON
+    keys are iterated in `serde_json::Map`'s default `BTreeMap` — i.e.
+    *alphabetical* — order by `tests/condarc_conformance.rs`'s
+    `invalid_cases`, and the harness's per-case `assert!` panics on the
+    *first* failing case, so only `add_anaconda_token` — alphabetically
+    first among the ~41 keys in these shared fixtures — ever surfaced as
+    a failure per fixture even though the underlying crate bug affected
+    all ~41 of that fixture's keys identically; fixing the bug fixed all
+    of them in one change, but this "assert-stops-the-loop" harness
+    behavior is itself worth revisiting separately if a *different*
+    per-key regression should ever need to be fully enumerated rather
+    than just detected).
+    **Fix applied**: `crates/condarc/src/coerce/boolish.rs`'s `boolify()`
+    now rejects `RawValue::Seq`/`RawValue::Map` outright (a
+    `CoercionError`, mirroring `InvalidTypeError`) instead of returning a
+    truthiness-coerced `bool`.
+17. **conda's `LoadedParameter.typify()`/`typify_data_structure()`
+    unconditionally strips a *string* raw value's leading/trailing
+    whitespace (`value.strip()`) before dispatching on `element_type` —
+    for *every* `element_type` shape except the single, exact class `str`
+    (`PlainString`'s whitespace-preserving short-circuit, already
+    documented in §2.1/§2.4 item 5) — including the boolish `(str, bool)`/
+    `(bool, int)` tuple shapes' *own* internal `boolify()`/
+    `typify_str_no_hint()` calls, and every `(str, NoneType)` nullable
+    string.** This single unconditional strip has several previously-
+    undocumented, empirically-confirmed knock-on consequences this
+    session's conformance run caught as crate bugs (all now fixed):
+    - **`ssl_verify`'s `return_string=True` passthrough must return the
+      *stripped* string, not the raw original.** `typify()` reassigns its
+      own `value` local to the stripped form *before* calling
+      `boolify(value, return_string=True)` for `ssl_verify`'s `(str,
+      bool)` shape — so the string `boolify()` ultimately falls through to
+      returning unchanged (when nothing else matches) is already
+      whitespace-trimmed by the time `boolify()` ever sees it. Confirmed:
+      `ssl_verify: "  truststore\t"` strips to `"truststore"` *before* the
+      literal-match check that resolves to `SslVerify::Truststore`; the
+      crate previously compared the *unstripped* original against the
+      literal `"truststore"`, failed the match, fell through to treating
+      it as an unverified path string, and then (with
+      `ssl_verify_fs_check` enabled) rejected it as a nonexistent path.
+      Fixed in `boolish.rs`'s `boolify()`: `original_str` is now derived
+      via `s.trim()`, not `s.clone()`.
+    - **`NullableString` (`client_ssl_cert`, `client_ssl_cert_key`,
+      `default_python`, and both `NullableStringMap` value types
+      `override_virtual_packages`/`proxy_servers`) must strip whitespace
+      before both the case-insensitive `"none"` null-fold *and* the
+      returned `Some(String)`.** `typify()`'s `(str, NoneType)` branch is
+      `value = str(value); return None if value.lower() == 'none' else
+      value` — reached only *after* the unconditional top-of-function
+      `.strip()` for an originally-`str` value, so the null-fold check and
+      the returned string are both against the *stripped* form. Confirmed
+      three ways: `client_ssl_cert_key: "  NoNe\t"` strips to `"NoNe"`,
+      then null-folds case-insensitively to unset (no cross-field
+      violation even though a naive "does the raw string equal `none`"
+      check would miss it due to the padding); `client_ssl_cert_key: "
+      "` (whitespace-only) strips to `""` (not a `"none"` match, but also
+      not `None` — it stays the *empty string*, a subtlety the next item
+      depends on); `override_virtual_packages: {k: "   "}` /
+      `proxy_servers: {k: "\t\n"}` both strip their value to `""`.
+      Fixed in `coerce/strings.rs`'s `coerce_nullable_string()`: the
+      stringified value is now `.trim()`'d (only when the *original*
+      `RawValue` was already a `Str` — a non-string scalar's
+      Python-`str()`-equivalent rendering, e.g. `False -> "False"`, is
+      never whitespace-padded to begin with and is left alone) before
+      both the `eq_ignore_ascii_case("none")` check and the `Some(..)`
+      return.
+    - **`default_python`'s own range-check validator never needed to
+      change at all** — it already operated on whatever string
+      `coerce_nullable_string()` handed it, so fixing that one function
+      transitively fixed `default_python: "  3.9\t\n"` (strips to `"3.9"`,
+      which passes the `[2.0, 4.0)` range check) with no changes to
+      `validate.rs`.
+    - **`Context.post_build_validation()`'s `client_ssl_cert`/
+      `client_ssl_cert_key` cross-field rule (§1.4 item 1) is plain Python
+      truthiness — `if self.client_ssl_cert_key and not
+      self.client_ssl_cert`** — so a whitespace-only `client_ssl_cert_key`
+      that strips to `""` is *falsy* and never trips the rule at all
+      (regardless of `client_ssl_cert`), while a whitespace-only
+      `client_ssl_cert` that strips to `""` is *also* falsy and so
+      satisfies `not self.client_ssl_cert` — tripping the rule if
+      `client_ssl_cert_key` is any truthy (non-empty, non-`"none"`)
+      string. The crate's `validate.rs::is_truthy_nullable_string`
+      already implemented exactly this "empty string is falsy" semantics
+      correctly — the only missing piece was that `coerce_nullable_string`
+      wasn't stripping whitespace down to `""` in the first place before
+      that check ran. No change needed in `validate.rs`; fixing
+      `coerce_nullable_string` was sufficient. Confirmed via the oracle:
+      `client_ssl_cert_key: "   "` alone is *valid* (the whitespace-only
+      key strips to falsy, no cert required); `client_ssl_cert_key: "x",
+      client_ssl_cert: "   "` is *invalid* (key is truthy, but the
+      whitespace-only cert strips to falsy `""`, tripping "`
+      client_ssl_cert` is required when `client_ssl_cert_key` is
+      defined").
+18. **`MapParameter` and `SequenceParameter` use two different,
+    non-symmetric raw-shape gates in `common/configuration.py` — this
+    crate's `coerce/sequences.rs` had wrongly assumed they were mirror
+    images of each other.** `SequenceParameter.load()` gates on
+    `isiterable(value)` (`conda/common/compat.py`), which returns `True`
+    for a `dict` (dicts are iterable in Python) as well as a
+    `list`/`tuple` — so an *empty* `dict` in a list-typed slot iterates to
+    zero elements and is accepted as an empty sequence (already correctly
+    modeled by this crate's `sequence_items()`). `MapParameter.load()`,
+    by contrast, gates on `isinstance(value, Mapping)` — a `list`/`tuple`
+    is never a `Mapping` instance, **empty or not**, so it is
+    unconditionally rejected with `InvalidTypeError` regardless of length.
+    This crate's `map_entries()` had incorrectly mirrored
+    `sequence_items()`'s leniency (`RawValue::Seq(items) if
+    items.is_empty() => Ok(Some(empty map))`), on the assumption the two
+    gates were symmetric; they are not. Empirically confirmed via the
+    real conda oracle: `channels: {}` is accepted as `()`, but
+    `custom_channels: []` raises `InvalidTypeError: ... has type tuple.
+    Valid types: - frozendict` — matching `conformance/condarc/invalid/
+    {custom_multichannels,dict_of_strings}_values_reject_bare_list_empty
+    .json`. The same `MapParameter`-shaped gate applies one level down
+    inside a `channel_settings` *element* too (each element is itself
+    `MapParameter(str)`-typed), which is what
+    `channel_settings_reject_array_nested_empty_array_element.json`
+    (`channel_settings: [[]]`) exercises — a *sequence*-shaped element
+    (even an empty one) inside a *map*-shaped slot is rejected the same
+    way. **Fix applied**: removed the `RawValue::Seq(items) if
+    items.is_empty()` branch from `sequences.rs`'s `map_entries()`
+    entirely; a bare YAML list is now unconditionally rejected as a
+    map-typed value, matching `MapParameter.load()` exactly. (Separately
+    confirmed, and requiring *no* fix: a **non-empty** `dict` fed to a
+    *sequence*-typed setting, e.g. `channels: {a: 1}`, does not cleanly
+    reject *or* accept — it crashes with an unhandled `AttributeError:
+    'str' object has no attribute 'value'`, since `SequenceParameter.
+    load()`'s `for child_value in value: ... self._element_type.load(name,
+    child_value)` iterates a dict's *keys* as if each were a raw-parameter
+    match object. This is yet another crash bug in the same family as
+    items 7-9 above, but the conformance harness's broad `except
+    Exception` already treats any crash as "invalid" either way, so
+    `conformance/condarc/invalid/list_of_strings_values_reject_object_
+    nonempty.json` was already correctly modeled and needed no change.)
+19. **`SequenceParameter`'s per-element `null` handling and its
+    sequence-wide deduplication are two more previously-undocumented
+    behaviors, both confirmed via the oracle and both now implemented.**
+    - **A `null` *element* inside a sequence of maps becomes an empty map,
+      not a rejection**, because `MapParameter.load(name, match)` special-
+      cases `if value is None: return MapLoadedParameter(name,
+      frozendict(), ...)` *before* its `isinstance(value, Mapping)` gate
+      (item 18) is ever reached — this only matters for `channel_settings`
+      (the one sequence-of-maps setting in the whole catalog), since a
+      `null` element has no "unset" concept to propagate to (there's no
+      absent-vs-present distinction for one entry inside a sequence).
+      Confirmed: `channel_settings: [null]` reads back as `({},)`;
+      `channel_settings: [null, {channel: x}]` as `({}, {channel: x})` —
+      see `conformance/condarc/valid/channel_settings_accept_array_
+      element_null_treated_as_empty_map.json` and its `array_size_2_*`
+      siblings. **Fix applied**: `coerce/sequences.rs`'s
+      `coerce_channel_settings_seq()` now does
+      `coerce_string_map(item)?.unwrap_or_default()` instead of
+      `.ok_or_else(|| error)?` for a `null` element.
+    - **`SequenceLoadedParameter.merge()` always deduplicates a
+      sequence-typed setting's values, keeping first-occurrence order,
+      even for a single-source document with nothing to actually
+      *merge*.** `merge()`'s final step is `tuple(unique((*top_lines,
+      *all_lines)))` — `unique()` runs unconditionally on the *combined*
+      value list, not only when multiple sources contributed to it, so a
+      document's own internal duplicates are deduplicated too. Confirmed
+      independently for three different `SequenceParameter(str)`-typed
+      keys from a single-key `.condarc` each: `channels: [a, a]` ->
+      `('a',)`; `allowlist_channels: [a, a]` -> `('a',)`; `list_fields:
+      [name, name]` -> `('name',)`. Also confirmed for the one
+      `SequenceParameter(MapParameter(str))` key, comparing whole
+      *elements* for equality rather than scalars: `channel_settings:
+      [{channel: x}, {channel: x}]` -> a single-element tuple;
+      `channel_settings: [null, null]` -> a single-element tuple of one
+      empty map (the per-element `null`-to-`{}` folding above happens
+      first, then the *result* still dedupes). This is a real, universal
+      conda behavior for every sequence-typed setting, not an artifact of
+      any one key's own coercion — see `conformance/condarc/valid/
+      list_fields_accept_duplicate_field_names.json`,
+      `list_of_strings_values_accept_array_size_2_duplicate_strings.json`
+      (18 different `StringSeq` keys in one fixture, all deduped), and
+      `channel_settings_accept_array_size_2_duplicate_identical_maps
+      .json`. **Fix applied**: a new `dedup_preserving_order()` helper in
+      `coerce/sequences.rs`, applied to the final `Vec` produced by
+      `coerce_string_seq()`, `coerce_list_fields_seq()`, and
+      `coerce_channel_settings_seq()` alike (an `O(n²)` `Vec::contains`
+      scan — real `.condarc` sequences are never large enough for this to
+      matter).
+20. **`local_repodata_ttl`'s `(bool, int)` coercion path (§8 items 6/11)
+    has two more boundary gaps than previously documented, both now
+    fixed.** Both stem from the same root cause already on record — this
+    key goes through `typify_str_no_hint(str(value))`
+    (`_Regex.INT`/`.FLOAT`/etc.'s hand-written patterns), never through
+    `Int`/`Float`'s `int()`/`float()` builtin-backed coercion or
+    `boolify()`'s own numeric-string probe — but the previous research
+    pass hadn't traced through what that means for a *native* (non-
+    string) float, or for underscore-separated integer strings:
+    - **A native YAML float is *always* rejected, never truncated to an
+      int — not even an in-range, whole-number-valued one.** `typify()`'s
+      dispatch table (§2.1) doesn't special-case "value is already a
+      native number" for the `{bool, int}` branch the way it does for the
+      pure-numeric `{int, float, complex}` branch (`numberify()`, which
+      *does* pass native numbers through unchanged) — `elif not
+      (type_hint - {bool, int}): return typify_str_no_hint(str(value))`
+      calls `str(value)` unconditionally, converting a native
+      `1.5`/`2.0`/`1e10` to its string form first regardless of whether it
+      started out as a string or not, then re-parses that string through
+      the same regex table a string input would hit. `str(1.5)` ->
+      `"1.5"` matches `_Regex.FLOAT`, and its `typish` is the `float`
+      constructor — so the *result* is a Python `float`, which then fails
+      `collect_errors`'s `isinstance(_, (bool, int))` check exactly like
+      an unmatched string would. This crate's prior implementation
+      treated `RawValue::Float` as a special native-value fast path,
+      truncating any `f64` within `i64` range straight to
+      `BoolOrInt::Int` — plausible-looking, but wrong: real conda rejects
+      `local_repodata_ttl: 1.5` (and `2.0`, `1e10`, ...) unconditionally,
+      confirmed via the oracle
+      (`conformance/condarc/invalid/local_repodata_ttl_reject_float
+      .json`). **Fix applied**: `coerce/numeric.rs`'s
+      `coerce_bool_or_int()` now rejects every `RawValue::Float` outright,
+      with no range check or truncation at all.
+    - **The narrow `INT` regex (`^[-+]?\d+$`) has *no* PEP-515 underscore
+      support**, unlike `Int`/`Float`'s own `int()`/`float()`-equivalent
+      coercion (which this crate correctly implements with
+      `strip_pep515_underscores()`) and unlike `boolify()`'s own numeric-
+      string probe (`val.isnumeric()`, which strips nothing but also
+      doesn't need to since `isnumeric()` itself only accepts digit
+      characters — no underscore ever reaches it either way). An
+      underscore character anywhere in the string makes it fail *every*
+      one of `_Regex`'s patterns (`INT`, `FLOAT`, `BIN`, `OCT`, `HEX`,
+      `COMPLEX` — none tolerate an embedded `_`), so `typify_str_no_hint`
+      falls through its `_convert`'s `next(...)` with no match and
+      returns the string **unchanged**, which then fails the
+      `isinstance(_, (bool, int))` check just like the native-float case
+      above. Confirmed: `local_repodata_ttl: "1_000"` is rejected, even
+      though the *identical* string is a perfectly valid value for every
+      genuinely `int`-typed key (`repodata_threads: "1_000"` etc., via
+      `Int`'s own PEP-515-aware coercion) — see
+      `conformance/condarc/invalid/
+      local_repodata_ttl_reject_string_underscored_int.json`. **Fix
+      applied**: `coerce_bool_or_int()`'s string-integer fallback no
+      longer calls `strip_pep515_underscores()` at all — it parses the
+      trimmed string directly via `parse_int_literal()`, so an embedded
+      `_` fails outright instead of being stripped first.
+21. **A genuine YAML-*parser-library* capability gap, not a conda logic
+    difference: `yaml-rust2` (this crate's YAML dependency) does not
+    enforce YAML 1.1's "simple key" 1024-character length restriction that
+    `ruamel.yaml` (conda's own YAML library) does.** That restriction is a
+    scanner-implementation limit (needing bounded lookahead to find a
+    mapping key's terminating `:`), not a requirement of YAML's abstract
+    data model — different YAML libraries are free to enforce it, relax
+    it, or drop it entirely, and `yaml-rust2`/`ruamel.yaml` land on
+    opposite sides. Empirically confirmed directly against `yaml-rust2`
+    (`YamlLoader::load_from_str`): a JSON/YAML flow-mapping document with
+    a 1023-character quoted key (1025 characters once its surrounding
+    `"..."` quote marks are counted — exactly one character past
+    `scripts/generate_dict_of_strings_condarc_fixtures.py`'s documented
+    1024-character `ruamel.yaml` cutoff, see that script's own module
+    docstring item 4) parses successfully with `yaml-rust2`, producing an
+    ordinary string key with no error at all — where `ruamel.yaml` (and
+    therefore real conda) raises an uncaught `ParserError: while parsing a
+    flow mapping ... expected ',' or '}', but got ':'` for the identical
+    document (a whole-*document* YAML parse failure, before `Context` is
+     even constructed). This affects exactly two fixtures:
+    `conformance/condarc/invalid/{custom_multichannels,dict_of_strings}
+    _values_reject_key_exceeds_yaml_simple_key_length_limit.json`.
+    **Resolved**: rather than hand-rolling a from-scratch
+    reimplementation of `ruamel.yaml`'s scanner-internal 1024-character
+    bookkeeping inside this crate's own YAML-lowering layer purely to
+    chase two fixtures exercising an obscure, implementation-specific
+    edge of a third-party library this crate doesn't control, the
+    conformance harness (`tests/condarc_conformance.rs`) carries a
+    hardcoded, per-fixture list, `CRATE_SKIPPED_FIXTURES`, naming these
+    two `invalid/` fixtures: the `Crate` checker is skipped entirely for
+    them (never invoked at all, checked *before* running anything, in
+    `Checker::check`) — there is no crate-side rejection to compare
+    against a non-existent one, so nothing runs rather than something
+    running and being asserted against. The `Conda` and `OpenApi`
+    checkers are unaffected and continue to reject these two fixtures
+    normally. The *mirror image* is also covered: two new `valid/`
+    fixtures (`{custom_multichannels,
+    dict_of_strings}_values_accept_key_exceeds_yaml_simple_key_length_
+    limit.json`, the same 1023-character key) pin the crate's own
+    (permissive) side of the same gap — the `Crate` checker accepts them
+    normally against a hand-authored `expected/*.json` (real conda has
+    no live value to record, since it rejects the document outright; see
+    `scripts/generate_zzz_condarc_expected_fixtures.py`'s
+    `CRATE_ONLY_YAML_KEY_LENGTH_FIXTURES`), while both the `Conda`
+    checker and the `OpenApi` checker (whose schema deliberately encodes
+    conda's same 1024-character limit as `propertyNames.maxLength:
+    1022`) are named in the harness's other hardcoded list,
+    `RUST_ONLY_FIXTURES`, and are likewise skipped entirely (never
+    invoked) for these two fixtures specifically.
+22. **A second genuine, spec-acknowledged divergence (not a bug): an
+    explicit top-level `null` for *any* `SequenceParameter`- or
+    `MapParameter`-typed setting is discarded by conda's own raw-value
+    matching *before* it ever reaches `.load()`/`typify()` — both
+    `SequenceParameter.get_all_matches()` and `MapParameter.
+    get_all_matches()` filter `matches = tuple(m for m in matches if
+    m._raw_value is not None)` — making an explicit `null` for one of
+    these settings **completely indistinguishable, at the raw-matching
+    level, from that key never having appeared in the file at all.**
+    Concretely, this means conda's own *merged, effective* value for such
+    a setting always falls through to whatever the parameter's *class-
+    level* default is — which is the empty tuple/dict for most sequence/
+    map settings (`channel_settings`, `custom_multichannels`,
+    `migrated_custom_channels`, `override_virtual_packages`,
+    `proxy_servers`, and every plain `SequenceParameter(str)` key with no
+    documented non-empty default), but is genuinely **non-empty** for a
+    handful of specific settings per §4's catalog: `custom_channels`
+    (`DEFAULT_CUSTOM_CHANNELS = {"pkgs/pro":
+    "https://repo.anaconda.com"}`), `default_channels`
+    (`DEFAULT_CHANNELS`, the two/three `repo.anaconda.com` URLs),
+    `repodata_fns` (`("current_repodata.json", "repodata.json")`), and
+    `aggressive_update_packages` (`DEFAULT_AGGRESSIVE_UPDATE_PACKAGES =
+    ("ca-certificates", "certifi", "openssl")`). Confirmed via
+    `generate_zzz_condarc_expected_fixtures.py`'s live-oracle re-check for
+    all four affected conformance fixtures
+    (`conformance/condarc/valid/{channel_settings,
+    custom_multichannels,dict_of_strings,list_of_strings}_values_accept_
+    null_literal_treated_as_unset.json`): e.g. `{"custom_channels": null,
+    "migrated_custom_channels": null, "override_virtual_packages": null,
+    "proxy_servers": null}` reads back as `{"custom_channels":
+    {"pkgs/pro": "https://repo.anaconda.com"}, "migrated_custom_channels":
+    {}, "override_virtual_packages": {}, "proxy_servers": {}}` — the
+    *default*, not an absence.
+    **This is a direct, unavoidable collision with spec.md FR-038**
+    ("Absent settings MUST be represented as absent, not backfilled with
+    conda's documented default... there is no defaulting anywhere in the
+    crate... The crate does NOT maintain a table of conda defaults").
+    Given FR-038, this crate's `Config` deliberately — and, per that FR,
+    *correctly* — models an explicit top-level `null` for any of these
+    settings identically to that key being entirely absent (`None`) *by
+    default*, with no default backfilled unless the caller explicitly
+    opts in. **Resolved, not a pending divergence**: FR-038 itself is
+    unchanged (defaulting is still never automatic), but
+    `ParseOptions` now has an opt-in
+    `null_sequence_map_defaults: bool` field (default `false`) — see
+     `model.rs`'s doc comment on it and `parse.rs`'s
+     `conda_sequence_map_default`/`apply_null_sequence_map_default` — that,
+     when enabled, resolves exactly this one narrow case (an *explicit*
+     `null`, never an absent key, and only for a `SequenceParameter`-/
+     `MapParameter`-typed setting) to conda's own class-level default
+     instead of leaving the field `None`. The conformance harness's
+     `Crate` checker enables it (parallel to `ssl_verify_fs_check`, spec
+     A3) since the corpus was generated from real conda, which
+     unconditionally exhibits this behavior — so all four affected
+     fixtures' adapter-output comparisons now pass exactly, with no
+     divergence list needed.
+23. **Spec Assumption A4 (ASCII-only numeric parsing) now has a real
+    conformance fixture, exercised via a generalized form of the
+    `CRATE_SKIPPED_FIXTURES`/`RUST_ONLY_FIXTURES` "checker doesn't apply
+    at all" mechanism (item 21)** — not the different `CRATE_A1_
+    DIVERGENCES` "declared divergence, asserted not suppressed"
+    mechanism (item 14/15) — **rather than being left undertested.**
+    `default_python`'s custom validator ultimately calls Python's
+    `float()`, which accepts **any** Unicode decimal digit (Unicode
+    category `Nd`), not just ASCII `0`-`9` — verified empirically
+    against conda 26.5.3: `default_python: "٣.٩"` (U+0663 ARABIC-INDIC
+    DIGIT THREE, U+0669 ARABIC-INDIC DIGIT NINE) loads successfully, and
+    `context.default_python` reads back as the literal,
+    un-transliterated string `"٣.٩"` — conda does not normalize the
+    digits to ASCII, it just accepts them as-is. Rust's `f64::from_str`
+    (and, by design, this crate's `default_python` validator, which
+    explicitly gates on `is_ascii_only()` before ever calling
+    `str::parse::<f64>()`) is ASCII-only, so the crate rejects the
+    identical value with a `semantic_validation` error.
+    `conformance/condarc/valid/
+    default_python_accept_unicode_arabic_indic_digits.json` pins exactly
+    this case.
+    - **Why the skip mechanism, not the assert-divergence mechanism**:
+      `CRATE_A1_DIVERGENCES` (item 14's bignum fixtures) exists for
+      cases where a checker's accept/reject *verdict itself* is the
+      thing under test, and is *expected* to disagree with conda's --
+      the whole point of that list is to keep proving the crate still
+      correctly *rejects* an out-of-range numeral, so a fixture that
+      quietly stopped diverging (started being wrongly accepted) fails
+      loudly. That shape doesn't fit here: this Unicode-digit case isn't
+      testing whether the `Crate`/`OpenApi` checkers correctly implement
+      some rejection rule of their own -- it's simply a case neither of
+      them has any way to agree with conda on at all, by construction
+      (see below). There's nothing checker-specific to keep proving
+      correct beyond "still ASCII-only", which the crate's/schema's own
+      unit-level tests already cover far more directly. Treating it as
+      a *skip* (this fixture "doesn't apply" to those two checkers, the
+      same shape as the pre-existing YAML simple-key-length gap) is
+      simpler and avoids growing a second assert-and-fail-loudly list
+      for what is really an "unsupported input shape" gap, not a
+      "verify the rejection still fires" gap.
+    - **Mechanism**: a third hardcoded list joins
+      `CRATE_SKIPPED_FIXTURES`/`RUST_ONLY_FIXTURES` in
+      `tests/condarc_conformance.rs`: `CONDA_ONLY_FIXTURES`, containing
+      this one fixture's stem. `is_fixture_skipped_for_checker` now
+      also skips the `Crate` checker (folded into the same match arm as
+      `CRATE_SKIPPED_FIXTURES`) and the `OpenApi` checker (folded into
+      the same arm as `RUST_ONLY_FIXTURES`) for any stem in
+      `CONDA_ONLY_FIXTURES` -- checked, like the other two lists,
+      *before* either checker ever runs, so no `condarc::parse` call
+      and no schema validation is attempted for this fixture at all.
+      Only the `Conda` checker runs normally on it, including the usual
+      `assert_conda_expected_representation` re-derivation check against
+      `conformance/condarc/expected/
+      default_python_accept_unicode_arabic_indic_digits.json` (generated
+      the same way as every other `expected/*.json`, via
+      `scripts/generate_zzz_condarc_expected_fixtures.py --fixture`,
+      and recording conda's real, un-transliterated
+      `{"default_python": "٣.٩"}`).
+    - **Both checkers being inapplicable is a coincidence of two
+      unrelated ASCII-only decisions, not one shared cause.** The
+      `Crate` checker's inapplicability is straightforward: Rust's
+      numeric parsers are ASCII-only (A4's actual "Decision" clause).
+      The `OpenApi` checker's inapplicability is a *separate* fact about
+      `docs/condarc_openapi.json`'s `default_python` regex pattern,
+      which was deliberately authored with an explicit `[0-9]`
+      character class (not `\d`) specifically to mirror the crate's
+      ASCII-only simplification rather than reimplement conda's true
+      Unicode-tolerant behavior (see that schema's own
+      `CondaDefaultPython` description).
+    - **There is no portable fix available on the `OpenApi` side
+      anyway, and this was verified empirically rather than assumed** --
+      worth recording even though the schema's own gap didn't end up
+      needing a divergence-list *assertion*. The obvious fix-the-regex
+      instinct — swap `[0-9]` for `\d`, or the more precise `\p{Nd}`
+      (Unicode's actual "decimal digit" general category, the exact set
+      `float()` accepts) — was tried directly against this repo's own
+      `jsonschema` crate (the same one `check_openapi` uses). Both
+      compile successfully but **neither matches** the Arabic-Indic
+      digits: this `jsonschema` crate's regex backend evidently compiles
+      `pattern` values in ECMA-262/JS-style *non-Unicode* mode
+      (confirmed by contrast: the bare `regex` and `fancy-regex` crates
+      *do* match `\d` against a Unicode digit by default — the
+      restriction is specific to how `jsonschema` compiles a schema's
+      `pattern` string, not a property of Rust regex engines in
+      general). This isn't an accident of this one crate's
+      implementation choice, either: JSON Schema's `pattern` keyword is
+      specified against ECMA-262 regex semantics for cross-
+      implementation portability, and ECMA-262's `\d`/`\p{Nd}` require
+      an explicit `u`/`v` regex *flag* to become Unicode-aware — flags
+      the `pattern` keyword has no syntax to express (a schema author
+      can write a pattern *string*, never a flag). So even a JSON Schema
+      implementation that *did* happily match `\d` against a Unicode
+      digit (as this repo's happens not to) would be making a
+      permissive choice the spec doesn't require any other
+      implementation to share — encoding "accept a Unicode decimal
+      digit" in `pattern` is not a solvable-with-the-right-regex
+      problem, it's a genuine capability gap in JSON Schema's regex
+      dialect itself.
+    - **Fixing the regex wouldn't remove the gap even if it worked,
+      since the crate itself is unaffected either way.** The crate's own
+      ASCII-only decision is a deliberate Rust-side simplification
+      independent of the schema — changing only the schema's pattern
+      would just turn "both `Crate` and `OpenApi` are inapplicable" into
+      "only `Crate` is inapplicable" (now needing the assert-divergence
+      mechanism after all, just for one checker instead of two), and
+      would make the schema diverge from the crate it's expressly
+      designed to mirror (per its own description's stated intent). The
+      "both inapplicable, cleanly skipped" state recorded here is the
+      simpler, more honest one to pin down.
+    - **Scope note**: A4's own text also gives `repodata_threads: "٣"`
+      as a second example (a plain numeric key, not `default_python`).
+      That is the same underlying gap, but it is *not* separately
+      fixtured here — only `default_python`'s validator
+      (`scripts/generate_default_python_condarc_fixtures.py`) gained a
+      Unicode-digit case. A future contributor extending numeric-key
+      coverage (item 14) to the same Unicode-digit boundary should reuse
+      `CONDA_ONLY_FIXTURES` rather than inventing a fourth mechanism.

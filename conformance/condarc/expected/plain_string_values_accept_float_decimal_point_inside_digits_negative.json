@@ -1,0 +1,10 @@
+{
+  "console": "-3.5",
+  "default_activation_env": "-3.5",
+  "env_prompt": "-3.5",
+  "error_upload_url": "-3.5",
+  "root_prefix": "-3.5",
+  "solver": "-3.5",
+  "subdir": "-3.5",
+  "target_prefix_override": "-3.5"
+}

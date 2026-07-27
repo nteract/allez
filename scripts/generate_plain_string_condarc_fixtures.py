@@ -147,6 +147,89 @@ ACCEPT_CANDIDATES: list[tuple[str, object]] = [
     ("string_whitespace_padded", "  hello  "),
     ("string_unicode", "héllo wörld 日本語"),
     ("string_long", "x" * 5000),
+    # Float-magnitude notation-switching battery (GEN-?? review feedback on
+    # `python_repr_float` in crates/condarc/src/coerce/strings.rs): conda's
+    # `str(float)` conversion is CPython's `repr(float)`, which switches from
+    # fixed-point to `d.ddde+NN`/`d.ddde-NN` scientific notation once the
+    # value's decimal-point position falls outside `-4 < decpt <= 16`
+    # (CPython's `format_float_short`, mode 'r'). Rust's own `f64::to_string()`
+    # never does this -- it always prints full fixed-point digits -- so this
+    # existing battery's `float_positive`/`float_negative` pair (3.14/-3.14)
+    # accidentally never exercised that divergence: those magnitudes sit well
+    # inside the fixed-point range on both sides. Every candidate below is
+    # picked to sit *at* or *across* one of the two switch-over boundaries
+    # (10**16 on the large side, 10**-4 on the small side), verified against
+    # real conda exactly like every other candidate in this file.
+    (
+        "float_scientific_boundary_1e16",
+        1e16,
+    ),  # decpt=17 (>16) -- conda: "1e+16"; the reviewer's own example.
+    ("float_scientific_1e17", 1e17),  # decpt=18 -- conda: "1e+17".
+    ("float_scientific_negative_1e16", -1e16),  # sign must survive the switch: "-1e+16".
+    (
+        "float_scientific_huge_fractional_mantissa",
+        1.5e300,
+    ),  # fractional (non-single-digit) mantissa in scientific form: "1.5e+300".
+    ("float_scientific_small_1e_minus5", 1e-5),  # decpt=-4 (<=-4) -- conda: "1e-05".
+    ("float_scientific_negative_small_1e_minus5", -1e-5),  # conda: "-1e-05".
+    (
+        "float_boundary_1e15_stays_fixed",
+        1e15,
+    ),  # decpt=16 (not >16) -- one order of magnitude *inside* the large-side
+    # boundary; conda: "1000000000000000.0" (fixed, with the forced ".0").
+    (
+        "float_boundary_1e_minus4_stays_fixed",
+        1e-4,
+    ),  # decpt=-3 (not <=-4) -- one order of magnitude *inside* the small-side
+    # boundary; conda: "0.0001" (fixed, no forced trailing zero needed).
+    (
+        "float_boundary_near_1e16_integral_stays_fixed",
+        9999999999999998.0,
+    ),  # largest-magnitude integral float below 10**16; conda: still fixed
+    # ("9999999999999998.0"), unlike 1e16 one candidate above.
+    ("float_zero", 0.0),  # conda: "0.0" -- sanity check, not itself divergent.
+    ("float_negative_zero", -0.0),  # conda: "-0.0" -- sign must be preserved on zero too.
+    # Remaining branch/sub-branch/sign combinations from crates/condarc/src/coerce/strings.rs's
+    # `tests` module (`python_repr_float_*`/`shortest_digits_and_exponent_*`) not already
+    # covered above -- mirrored here 1:1 so every case that's unit-tested against
+    # `python_repr_float` directly is *also* verified end-to-end against a real conda oracle
+    # through this battery, not just the crate's own (self-consistent, but conda-independent)
+    # reasoning about what `repr(float)` ought to do. `f64::NAN`/`f64::INFINITY`/
+    # `f64::NEG_INFINITY` are deliberately excluded: strict JSON has no numeric token for them
+    # (Python's `json.dumps` would emit the non-standard `NaN`/`Infinity`/`-Infinity` bare
+    # words, which -- unquoted -- are plain YAML *strings*, not floats, defeating the point of
+    # a fixture meant to exercise `RawValue::Float`), so this file's JSON-fixture-via-YAML
+    # pipeline (`check_candidate`'s `json.dumps(doc)`) cannot represent them at all; the unit
+    # tests remain the only coverage for that pair of branches, same as for the two
+    # structurally-unreachable `unreachable!()` branches in `shortest_digits_and_exponent`.
+    ("float_one", 1.0),  # digits="1", decpt=1==len(1) -- zero-iteration whole-number padding.
+    ("float_decimal_point_inside_digits", 3.5),  # decpt=1 < len=2, no padding/forced ".0".
+    ("float_decimal_point_inside_digits_negative", -3.5),  # same, negative sign.
+    (
+        "float_decimal_point_inside_digits_wide",
+        123.456,
+    ),  # decpt=3 < len=6 -- a wider digit string landing the point mid-string.
+    ("float_boundary_1e_minus4_stays_fixed_negative", -1e-4),  # -1e-4 boundary pair, negative
+    # sign (positive already covered by `float_boundary_1e_minus4_stays_fixed` above).
+    ("float_scientific_huge_fractional_mantissa_negative", -1.5e300),  # 1.5e300's negative-sign
+    # pair (+value/+exponent already covered above).
+    ("float_scientific_small_magnitude_1e_minus10", 1e-10),  # magnitude==10 exactly -- the
+    # exponent-zero-padding "false" branch boundary (1e-5's magnitude=5 hits "true").
+    ("float_scientific_multi_digit_negative_exponent", 1.5e-10),  # multi-digit mantissa x
+    # negative exponent, the one {mantissa-width}x{exponent-sign} combination the boundary
+    # candidates above don't already cover on their own.
+    ("float_scientific_multi_digit_negative_exponent_negative", -1.5e-10),  # same, negative sign.
+    ("float_fixed_fractional_decpt_zero", 0.5),  # decpt=0 -- zero-iteration leading-zero loop.
+    ("float_fixed_fractional_decpt_negative_one", 0.05),  # decpt=-1 -- one leading zero.
+    ("float_fixed_fractional_decpt_negative_two", 0.005),  # decpt=-2 -- two leading zeros.
+    ("float_fixed_whole_number_zero_padding", 123.0),  # decpt=3==len(3) -- zero-iteration
+    # whole-number padding loop, at a small/legible magnitude (see also `float_one` above and
+    # `float_boundary_near_1e16_integral_stays_fixed`'s much larger instance of this same edge).
+    ("float_fixed_whole_number_zero_padding_negative", -123.0),  # same, negative sign.
+    ("float_fixed_whole_number_with_padding", 100.0),  # decpt=3 > len=1 -- a small,
+    # legible instance of the whole-number padding loop actually running (2 iterations; see
+    # also `float_boundary_1e15_stays_fixed` above for a much larger one, 15 iterations).
+    ("float_fixed_whole_number_with_padding_negative", -100.0),  # same, negative sign.
 ]
 
 # Invalid for every key in KEYS -- collection-shape battery

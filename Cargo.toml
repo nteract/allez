@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "crates/condarc"]
+
 [package]
 name = "allez"
 version = "0.1.0"
@@ -31,6 +34,7 @@ required-features = ["conformance-tests"]
 
 [dev-dependencies]
 assert_cmd = "2.2.2"
+condarc = { path = "crates/condarc" }
 jsonschema = { version = "0.48.5", default-features = false }
 predicates = "3.1.4"
 rstest = "0.26.1"

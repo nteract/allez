@@ -196,6 +196,17 @@ SHARED_ACCEPT: list[tuple[str, object]] = [
     ("numeric_string_underscored", "1_000"),
     ("numeric_string_whitespace_padded", " 42 "),
     ("numeric_string_whitespace_padded_tabs_and_newlines", "\t\n42\n\t"),
+    # Exactly at the i64 boundary, as a *string* (unlike int_boundary_i32_max/min above,
+    # which are bare JSON numbers) -- a Rust implementation that parses a signed numeral by
+    # stripping the sign and parsing the unsigned magnitude before negating rejects
+    # "-9223372036854775808" here, because i64's negative range is one wider than its
+    # positive range (MIN = -9223372036854775808, MAX = 9223372036854775807): the unsigned
+    # magnitude 9223372036854775808 alone overflows a positive i64 by one, even though the
+    # signed value is exactly in range. Both boundaries are ordinary, exactly-representable
+    # Python ints that real conda accepts without incident; this pair exists specifically to
+    # catch that asymmetric sign/magnitude parsing bug at the conformance-test level.
+    ("numeric_string_boundary_i64_max", "9223372036854775807"),  # i64::MAX
+    ("numeric_string_boundary_i64_min", "-9223372036854775808"),  # i64::MIN
     # Bignum strings straddling fixed-width integer boundaries -- see
     # the module docstring's "cross-implementation numeric-storage risk"
     # section. All of these are ordinary, exactly-representable Python
@@ -239,6 +250,18 @@ FLOAT_ONLY_ACCEPT: list[tuple[str, object]] = [
     ("string_infinity_word", "Infinity"),
     ("string_negative_infinity", "-inf"),
     ("string_positive_infinity_explicit_sign", "+inf"),
+    # An *ordinary* numeral (not one of the explicit nan/inf/infinity tokens above) whose
+    # magnitude exceeds f64's ~1.8e308 max finite value. float() silently overflows this to
+    # +-inf with no error raised -- the same well-defined IEEE-754 double-overflow behavior
+    # every conforming float implementation (C, Python, JS, Rust, ...) exhibits identically.
+    # Isolated to FLOAT_KEYS only (unlike numeric_string_bignum_exceeds_f64_max_finite in
+    # SHARED_ACCEPT above, which applies the same magnitude to every numeric key at once,
+    # INT_KEYS included) so this fixture exercises *only* the float-overflow behavior with
+    # nothing else in the document that could fail for an unrelated reason -- see
+    # docs/condarc_research.md item 14's A1 write-up and spec.md's A1 for why this
+    # specifically must NOT diverge from conda even though the i64 bignum case does.
+    ("string_scientific_overflow_positive", "1e400"),
+    ("string_scientific_overflow_negative", "-1e400"),
 ]
 
 # Invalid for every key in ALL_NUMERIC_KEYS -- neither int() nor

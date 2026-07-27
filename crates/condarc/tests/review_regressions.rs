@@ -31,3 +31,17 @@ fn reports_the_nested_path_to_a_non_string_mapping_key() {
         }
     );
 }
+
+#[test]
+fn stringifies_floats_like_python_and_conda() {
+    let config = parse("solver: 1e16").expect("a float scalar is string-coercible");
+
+    assert_eq!(config.solver.as_deref(), Some("1e+16"));
+}
+
+#[test]
+fn pads_small_float_exponents_like_python_and_conda() {
+    let config = parse("solver: 1e-5").expect("a float scalar is string-coercible");
+
+    assert_eq!(config.solver.as_deref(), Some("1e-05"));
+}

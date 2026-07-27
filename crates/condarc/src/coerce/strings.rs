@@ -34,11 +34,24 @@ fn python_repr_float(f: f64) -> String {
         "nan".to_string()
     } else if f.is_infinite() {
         if f > 0.0 { "inf" } else { "-inf" }.to_string()
-    } else if f == f.trunc() && f.abs() < 1e16 {
+    } else if f.abs() >= 1e16 || (f != 0.0 && f.abs() < 1e-4) {
+        python_scientific_notation(f)
+    } else if f == f.trunc() {
         format!("{f:.1}")
     } else {
         f.to_string()
     }
+}
+
+fn python_scientific_notation(f: f64) -> String {
+    let rendered = format!("{f:e}");
+    let Some((mantissa, exponent)) = rendered.split_once('e') else {
+        return rendered;
+    };
+    let Ok(exponent) = exponent.parse::<i32>() else {
+        return rendered;
+    };
+    format!("{mantissa}e{exponent:+03}")
 }
 
 /// `PlainString` — `str` (FR-014).

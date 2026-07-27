@@ -2,7 +2,7 @@
 //! type-invalid `.condarc` text to `condarc::parse` produces a structured, never-panicking
 //! `ValidationReport`.
 
-use condarc::{ErrorKind, Location};
+use condarc::{ErrorKind, Location, PathSegment};
 
 /// Scenario 1: `channel_alias` with no URL scheme is rejected with a `semantic_validation` entry
 /// located at `channel_alias`, carrying the offending value.
@@ -178,10 +178,10 @@ fn multiple_root_level_non_string_keys_each_produce_their_own_entry() {
 }
 
 /// A non-string key nested inside a specific setting's value (here, one `channel_settings` list
-/// element) is located at that enclosing setting, not at `Root` — and the rest of that element is
-/// still parsed (the sibling `channel` key survives).
+/// element) includes the path to its enclosing collection — and the rest of that element is still
+/// parsed (the sibling `channel` key survives).
 #[test]
-fn nested_non_string_key_is_located_at_the_enclosing_setting() {
+fn nested_non_string_key_includes_the_enclosing_collection_path() {
     let yaml = "channel_settings:\n  - 1: x\n    channel: y\n";
     let report = condarc::parse(yaml).expect_err("non-string nested key rejected");
 
@@ -189,8 +189,9 @@ fn nested_non_string_key_is_located_at_the_enclosing_setting() {
     assert_eq!(report.entries()[0].kind, ErrorKind::TypeCoercion);
     assert_eq!(
         report.entries()[0].location,
-        Location::Setting {
-            setting: "channel_settings".to_string()
+        Location::Nested {
+            setting: "channel_settings".to_string(),
+            path: vec![PathSegment::Index { index: 0 }],
         }
     );
 }

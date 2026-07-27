@@ -1,4 +1,4 @@
-use condarc::{ErrorKind, parse};
+use condarc::{ErrorKind, Location, PathSegment, parse};
 
 #[test]
 fn rejects_float_literals_that_overflow_to_infinity() {
@@ -15,4 +15,19 @@ fn accepts_the_minimum_signed_integer_literal() {
         .expect("the minimum i64 value is in range");
 
     assert_eq!(config.remote_max_retries, Some(i64::MIN));
+}
+
+#[test]
+fn reports_the_nested_path_to_a_non_string_mapping_key() {
+    let report = parse("channel_settings:\n  - channel: x\n    1: bad")
+        .expect_err("non-string mapping keys must be rejected");
+
+    assert_eq!(report.entries().len(), 1);
+    assert_eq!(
+        report.entries()[0].location,
+        Location::Nested {
+            setting: "channel_settings".to_string(),
+            path: vec![PathSegment::Index { index: 0 }],
+        }
+    );
 }

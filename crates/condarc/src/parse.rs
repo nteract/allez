@@ -9,7 +9,7 @@ use yaml_rust2::{Yaml, YamlLoader};
 use crate::catalog::{CATALOG, SemanticValidator, ValueKind};
 use crate::coerce::enums::EnumResult;
 use crate::coerce::{self, CoercionError, input_repr};
-use crate::error::{ErrorEntry, ErrorKind, InputRepr, Location, ValidationReport};
+use crate::error::{ErrorEntry, ErrorKind, InputRepr, Location, PathSegment, ValidationReport};
 use crate::model::{Config, ParseOptions};
 
 /// The internal, owned mirror of `yaml_rust2::Yaml`'s resolved-scalar-type tree (data-model.md
@@ -55,20 +55,28 @@ pub(crate) enum RawValue {
 /// canonical/alias catalog lookup, so the location is the key exactly as the document spelled it.
 pub(crate) fn lower_document(yaml: &Yaml) -> (RawValue, Vec<ErrorEntry>) {
     let mut entries = Vec::new();
-    let value = lower_tracking_dropped_keys(yaml, None, &mut entries);
+    let value = lower_tracking_dropped_keys(yaml, None, &mut Vec::new(), &mut entries);
     (value, entries)
 }
 
 fn lower_tracking_dropped_keys(
     yaml: &Yaml,
     enclosing_setting: Option<&str>,
+    path: &mut Vec<PathSegment>,
     entries: &mut Vec<ErrorEntry>,
 ) -> RawValue {
     match yaml {
         Yaml::Array(items) => RawValue::Seq(
             items
                 .iter()
-                .map(|item| lower_tracking_dropped_keys(item, enclosing_setting, entries))
+                .enumerate()
+                .map(|(index, item)| {
+                    path.push(PathSegment::Index { index });
+                    let lowered =
+                        lower_tracking_dropped_keys(item, enclosing_setting, path, entries);
+                    path.pop();
+                    lowered
+                })
                 .collect(),
         ),
         Yaml::Hash(hash) => {
@@ -80,15 +88,33 @@ fn lower_tracking_dropped_keys(
                         // setting" for everything nested under it; deeper non-string keys keep
                         // attributing to that same top-level name (data-model.md §1).
                         let nested_context = enclosing_setting.or(Some(key_str.as_str()));
+                        if enclosing_setting.is_some() {
+                            path.push(PathSegment::Key {
+                                key: key_str.clone(),
+                            });
+                        }
+                        let lowered = lower_tracking_dropped_keys(
+                            value,
+                            nested_context,
+                            path,
+                            entries,
+                        );
+                        if enclosing_setting.is_some() {
+                            path.pop();
+                        }
                         map.insert(
                             key_str.clone(),
-                            lower_tracking_dropped_keys(value, nested_context, entries),
+                            lowered,
                         );
                     }
                     non_string_key => {
                         let location = match enclosing_setting {
-                            Some(setting) => Location::Setting {
+                            Some(setting) if path.is_empty() => Location::Setting {
                                 setting: setting.to_string(),
+                            },
+                            Some(setting) => Location::Nested {
+                                setting: setting.to_string(),
+                                path: path.clone(),
                             },
                             None => Location::Root,
                         };

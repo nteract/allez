@@ -37,15 +37,18 @@ pub(crate) fn is_ascii_only(s: &str) -> bool {
 
 /// `int()`-equivalent parse of an underscore-stripped, ASCII-only numeral string: optional sign,
 /// ASCII digits only, no decimal point/exponent (FR-018 explicitly rejects those for integers).
+///
+/// Delegates to `i64::from_str` directly on the full (possibly signed) string rather than
+/// stripping the sign and parsing the unsigned magnitude separately. `i64`'s negative range is
+/// one wider than its positive range (`i64::MIN = -9_223_372_036_854_775_808` but
+/// `i64::MAX = 9_223_372_036_854_775_807`), so a sign-then-magnitude split rejects
+/// `"-9223372036854775808"` even though it is exactly `i64::MIN` and in range per A1 -- the
+/// unsigned magnitude `9223372036854775808` alone overflows a positive `i64` by one. Parsing the
+/// signed literal directly avoids this asymmetric boundary and needs no extra validation:
+/// `i64::from_str` already rejects empty/sign-only/doubled-sign/embedded-whitespace strings the
+/// same way the old manual split did. Do not reintroduce a sign-strip-then-multiply here.
 fn parse_int_literal(cleaned: &str) -> Option<i64> {
-    let (sign, digits) = match cleaned.strip_prefix('-') {
-        Some(rest) => (-1i64, rest),
-        None => (1i64, cleaned.strip_prefix('+').unwrap_or(cleaned)),
-    };
-    if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
-        return None;
-    }
-    digits.parse::<i64>().ok().map(|v| v * sign)
+    cleaned.parse::<i64>().ok()
 }
 
 /// `Int` — integer settings (FR-018): JSON booleans and numbers (floats truncated toward zero),
@@ -322,6 +325,19 @@ mod tests {
     }
 
     #[test]
+    fn int_accepts_i64_min_and_max_boundary_strings_per_a1() {
+        // i64's negative range is one wider than its positive range (MIN = -9223372036854775808,
+        // MAX = 9223372036854775807), so a naive sign-then-magnitude parse rejects MIN's unsigned
+        // magnitude (9223372036854775808) as overflowing a positive i64 by one, even though the
+        // signed value itself is exactly in range. Both boundaries must round-trip.
+        assert_eq!(coerce_int(&s("-9223372036854775808")), Ok(i64::MIN));
+        assert_eq!(coerce_int(&s("9223372036854775807")), Ok(i64::MAX));
+        // One past each boundary must still be rejected.
+        assert!(coerce_int(&s("9223372036854775808")).is_err());
+        assert!(coerce_int(&s("-9223372036854775809")).is_err());
+    }
+
+    #[test]
     fn int_rejects_out_of_range_float_value_per_a1() {
         assert!(coerce_int(&RawValue::Float(1e30)).is_err());
         assert!(coerce_int(&RawValue::Float(f64::INFINITY)).is_err());
@@ -412,6 +428,15 @@ mod tests {
     fn bool_or_int_accepts_integer_strings() {
         assert_eq!(coerce_bool_or_int(&s("5")), Ok(BoolOrInt::Int(5)));
         assert_eq!(coerce_bool_or_int(&s("-3")), Ok(BoolOrInt::Int(-3)));
+    }
+
+    #[test]
+    fn bool_or_int_accepts_i64_min_boundary_string_per_a1() {
+        // Shares `parse_int_literal` with `coerce_int` -- pin the same MIN boundary fix here too.
+        assert_eq!(
+            coerce_bool_or_int(&s("-9223372036854775808")),
+            Ok(BoolOrInt::Int(i64::MIN))
+        );
     }
 
     #[test]

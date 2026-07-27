@@ -196,6 +196,17 @@ SHARED_ACCEPT: list[tuple[str, object]] = [
     ("numeric_string_underscored", "1_000"),
     ("numeric_string_whitespace_padded", " 42 "),
     ("numeric_string_whitespace_padded_tabs_and_newlines", "\t\n42\n\t"),
+    # Exactly at the i64 boundary, as a *string* (unlike int_boundary_i32_max/min above,
+    # which are bare JSON numbers) -- a Rust implementation that parses a signed numeral by
+    # stripping the sign and parsing the unsigned magnitude before negating rejects
+    # "-9223372036854775808" here, because i64's negative range is one wider than its
+    # positive range (MIN = -9223372036854775808, MAX = 9223372036854775807): the unsigned
+    # magnitude 9223372036854775808 alone overflows a positive i64 by one, even though the
+    # signed value is exactly in range. Both boundaries are ordinary, exactly-representable
+    # Python ints that real conda accepts without incident; this pair exists specifically to
+    # catch that asymmetric sign/magnitude parsing bug at the conformance-test level.
+    ("numeric_string_boundary_i64_max", "9223372036854775807"),  # i64::MAX
+    ("numeric_string_boundary_i64_min", "-9223372036854775808"),  # i64::MIN
     # Bignum strings straddling fixed-width integer boundaries -- see
     # the module docstring's "cross-implementation numeric-storage risk"
     # section. All of these are ordinary, exactly-representable Python

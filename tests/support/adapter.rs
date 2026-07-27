@@ -369,10 +369,23 @@ pub fn to_expected_json(config: &Config) -> Value {
 // ---------------------------------------------------------------------
 
 /// `valid/` fixture *file stems* (no directory, no `.json` extension) that real conda accepts
-/// but this crate deliberately rejects, per spec Assumption A1 (fixed-width `i64`/`f64` cannot
-/// represent Python's arbitrary-precision numerals). These fixtures stay in `valid/` -- the
+/// but this crate deliberately rejects, per spec Assumption A1 (fixed-width `i64` cannot
+/// represent Python's arbitrary-precision integers). These fixtures stay in `valid/` -- the
 /// conda/openapi checkers must keep accepting them -- but the `Crate` checker's expected verdict
 /// for each is "rejected", not "accepted", and no adapter comparison runs for them at all.
+///
+/// **This list is `i64`-integer-overflow only, not `f64`-float-overflow.** A1 was revised to
+/// treat the two differently: an over-range *integer* numeral has no standard representable
+/// `i64` value and is rejected (genuinely diverging from conda), but an over-range *float*
+/// numeral overflows to `+-inf` -- the same standard IEEE-754 outcome real conda's own `float()`
+/// produces -- so it is accepted and does NOT diverge. `numeric_values_accept_numeric_string_
+/// bignum_exceeds_f64_max_finite` is still listed below, but only because that shared fixture
+/// also sets 11 `Int`-typed keys to the same oversized numeral (see
+/// `scripts/generate_numeric_condarc_fixtures.py`'s `SHARED_ACCEPT` battery) -- its 2
+/// `Float`-typed keys parse to `inf` and match conda exactly, same as everywhere else. The
+/// isolated `numeric_values_accept_float_only_string_scientific_overflow_{positive,negative}`
+/// fixtures exercise the float-only case with no `Int`-typed key in the same document to
+/// confound the verdict, and are deliberately NOT in this list.
 pub const CRATE_A1_DIVERGENCES: &[&str] = &[
     "numeric_values_accept_numeric_string_bignum_exceeds_i64_max",
     "numeric_values_accept_numeric_string_bignum_exceeds_u64_max",

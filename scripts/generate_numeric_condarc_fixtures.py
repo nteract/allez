@@ -239,6 +239,18 @@ FLOAT_ONLY_ACCEPT: list[tuple[str, object]] = [
     ("string_infinity_word", "Infinity"),
     ("string_negative_infinity", "-inf"),
     ("string_positive_infinity_explicit_sign", "+inf"),
+    # An *ordinary* numeral (not one of the explicit nan/inf/infinity tokens above) whose
+    # magnitude exceeds f64's ~1.8e308 max finite value. float() silently overflows this to
+    # +-inf with no error raised -- the same well-defined IEEE-754 double-overflow behavior
+    # every conforming float implementation (C, Python, JS, Rust, ...) exhibits identically.
+    # Isolated to FLOAT_KEYS only (unlike numeric_string_bignum_exceeds_f64_max_finite in
+    # SHARED_ACCEPT above, which applies the same magnitude to every numeric key at once,
+    # INT_KEYS included) so this fixture exercises *only* the float-overflow behavior with
+    # nothing else in the document that could fail for an unrelated reason -- see
+    # docs/condarc_research.md item 14's A1 write-up and spec.md's A1 for why this
+    # specifically must NOT diverge from conda even though the i64 bignum case does.
+    ("string_scientific_overflow_positive", "1e400"),
+    ("string_scientific_overflow_negative", "-1e400"),
 ]
 
 # Invalid for every key in ALL_NUMERIC_KEYS -- neither int() nor

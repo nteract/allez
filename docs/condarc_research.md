@@ -1003,6 +1003,20 @@ exactly the kind of full-fidelity detail worth keeping, not just "it passed."
       `integer`, ...) risks silently truncating, wrapping, or erroring
       where real conda does neither; `numeric_values_accept_
       *_bignum_*` fixtures exist specifically to catch that divergence.
+      **Resolved in spec.md's Assumption A1**: this crate rejects the
+      `int` case (no representable value exists for an over-`i64`
+      numeral) but deliberately does *not* reject the `float` case —
+      `f64` overflowing an over-range numeral to `+-inf` is itself a
+      standard, universal IEEE-754 outcome (every conforming
+      double-precision implementation, Python's `float()` included,
+      agrees), so it is not treated as a "risk" worth guarding against
+      for floats the way integer wraparound would be. The isolated
+      `numeric_values_accept_float_only_string_scientific_overflow_
+      {positive,negative}` fixtures pin this directly, with no `int`-typed
+      key in the same document to confound the verdict (unlike the
+      shared `numeric_string_bignum_exceeds_f64_max_finite` fixture
+      above, whose overall divergence comes entirely from its `int`-typed
+      sibling keys).
     Four fixture batteries came out of this: `numeric_values_accept_*`
     (valid for all 13 keys at once), `numeric_values_accept_float_only_*`
     (valid for the 2 `float` keys only), `numeric_values_reject_*`

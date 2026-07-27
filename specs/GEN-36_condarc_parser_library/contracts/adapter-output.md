@@ -39,7 +39,12 @@ pub fn to_expected_json(config: &condarc::Config) -> serde_json::Value;
    - `i64` → JSON number (guaranteed in-range by A1 — the adapter never has to encode an
      over-bound value, since out-of-range numerals are rejected at parse time).
    - `f64` → JSON number, **except** non-finite values: `+inf` → `"Infinity"`, `-inf` →
-     `"-Infinity"`, `NaN` → `"NaN"` (JSON strings, per research §8 item 15 / FR-041).
+     `"-Infinity"`, `NaN` → `"NaN"` (JSON strings, per research §8 item 15 / FR-041). This
+     applies uniformly whether the non-finite value came from an explicitly-spelled
+     `inf`/`infinity`/`nan` token or from an ordinary numeral that overflowed `f64`'s finite
+     range (e.g. `"1e400"`) — unlike `i64`, `f64` magnitude overflow is not rejected at parse
+     time (A1), so this is the one float-specific encoding rule that *does* have live inputs to
+     handle, in contrast to the `i64` row above.
    - `String` / nullable-`String` → JSON string / `null`.
    - `Vec<String>` → JSON array of strings.
    - `BTreeMap<String, String>` / `BTreeMap<String, Option<String>>` → JSON object (map values

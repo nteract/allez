@@ -57,9 +57,11 @@
 //!     `tests/support/adapter.rs` for the exact `expected/*.json`
 //!     comparison -- see [`check_crate`] and
 //!     [`assert_crate_expected_representation`]. Four `valid/` bignum
-//!     fixtures are declared A1 divergences (fixed-width `i64`/`f64`
-//!     cannot represent them) in
-//!     `support::adapter::CRATE_A1_DIVERGENCES` and are asserted
+//!     fixtures are declared A1 divergences (fixed-width `i64` cannot
+//!     represent arbitrary-precision *integer* numerals -- `f64` magnitude
+//!     overflow deliberately does NOT diverge, since it's the same
+//!     standard IEEE-754 `+-inf` outcome real conda's `float()` produces)
+//!     in `support::adapter::CRATE_A1_DIVERGENCES` and are asserted
 //!     *rejected* by this checker specifically, even though conda/openapi
 //!     still accept them -- see `valid_condarc_is_accepted`. A further
 //!     `valid/` fixture (a Unicode-decimal-digit `default_python` value,
@@ -1035,11 +1037,14 @@ fn valid_condarc_is_accepted(
     let outcome = checker.check(&value, &path);
 
     // The `Crate` checker has exactly four declared A1 divergences (spec Assumptions A1):
-    // fixed-width i64/f64 cannot represent these fixtures' arbitrary-precision numerals, so the
-    // crate deliberately *rejects* them even though they stay in `valid/` (real conda, and the
-    // openapi schema, still accept them -- see `support::adapter::CRATE_A1_DIVERGENCES`). This
-    // is an assertion, not a suppression: a listed fixture that stops diverging fails loudly
-    // below, and no adapter comparison ever runs for a fixture the crate rejects.
+    // fixed-width `i64` cannot represent these fixtures' arbitrary-precision *integer* numerals,
+    // so the crate deliberately *rejects* them even though they stay in `valid/` (real conda,
+    // and the openapi schema, still accept them -- see `support::adapter::CRATE_A1_DIVERGENCES`,
+    // whose doc comment also explains why this is `i64`-overflow-only: `f64` magnitude overflow
+    // is deliberately NOT a divergence, since it produces the same standard IEEE-754 `+-inf`
+    // outcome real conda's own `float()` does). This is an assertion, not a suppression: a
+    // listed fixture that stops diverging fails loudly below, and no adapter comparison ever
+    // runs for a fixture the crate rejects.
     if checker == Checker::Crate && support::adapter::is_crate_a1_divergence(&path) {
         match outcome {
             CheckOutcome::Invalid(_) => {}

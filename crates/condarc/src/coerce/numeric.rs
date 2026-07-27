@@ -100,6 +100,18 @@ pub(crate) fn coerce_int(value: &RawValue) -> Result<i64, CoercionError> {
 
 /// `Float` — float settings (FR-019): everything `Int` accepts, plus decimal, scientific
 /// notation, and `nan`/`inf`/`infinity` strings (case-insensitive, optionally signed).
+///
+/// Unlike `coerce_int`, this deliberately has **no magnitude/finiteness rejection** for the
+/// `RawValue::Str` numeral path: an ordinary numeral whose magnitude overflows `f64` (e.g.
+/// `"1e400"`) parses to `+-inf` here, the same as the explicitly-spelled `inf`/`infinity` tokens.
+/// This is intentional, not an oversight -- see spec.md's Assumption A1's int/float split:
+/// `i64` magnitude overflow has no standard representable value and is rejected, but `f64`
+/// magnitude overflow has a universal, standard IEEE-754 outcome (`+-inf`) that every conforming
+/// float implementation -- including Python's own `float()`, i.e. real conda -- already agrees
+/// on, so accepting it here is matching conda exactly, not diverging from it. Pinned by
+/// `float_accepts_overflow_produced_infinity_from_numeral_matches_conda_per_a1` below and by the
+/// isolated `numeric_values_accept_float_only_string_scientific_overflow_{positive,negative}`
+/// conformance fixtures (no `Int`-typed key in the same document to confound the verdict).
 pub(crate) fn coerce_float(value: &RawValue) -> Result<f64, CoercionError> {
     match value {
         RawValue::Bool(b) => Ok(if *b { 1.0 } else { 0.0 }),
@@ -138,12 +150,24 @@ pub(crate) fn coerce_float(value: &RawValue) -> Result<f64, CoercionError> {
 /// (including case-insensitive `inf`/`infinity`/`nan`), so this is mostly a thin, ASCII-checked
 /// wrapper -- kept as its own function so the non-decimal-base rejection (`"0x1a"` etc., FR-018)
 /// stays alongside its int counterpart's reasoning.
+///
+/// Deliberately does **not** follow up a successful `f64::from_str` with an `is_finite()` guard
+/// to reject overflow-produced `+-inf`. `f64::from_str` saturates an over-range numeral to
+/// infinity rather than erroring -- unlike `i64::from_str`, which does error on overflow (see
+/// `parse_int_literal`'s caller) -- and per spec.md's Assumption A1, that's the behavior this
+/// crate wants for `Float` settings: it's the same standard IEEE-754 overflow outcome real
+/// conda's `float()` produces, so leaving it alone here means matching conda, not diverging from
+/// it. Do not "fix" this by adding an `is_finite()` rejection without first re-reading A1 -- an
+/// earlier PR review flagged this exact function on the assumption that overflow should be
+/// rejected the same way `Int` overflow is; A1 was revised instead of this function, precisely
+/// because that assumption doesn't hold for floats (see A1's int/float split for the reasoning).
 fn parse_float_literal(cleaned: &str) -> Option<f64> {
     if cleaned.is_empty() {
         return None;
     }
     cleaned.parse::<f64>().ok()
 }
+
 
 /// `local_repodata_ttl`'s `(bool, int)` narrower boolish vocabulary (FR-020,
 /// docs/condarc_research.md §8 items 6/11): `typify_str_no_hint`'s hand-rolled regex table, a
@@ -334,6 +358,23 @@ mod tests {
         assert_eq!(coerce_float(&s("inf")), Ok(f64::INFINITY));
         assert_eq!(coerce_float(&s("-inf")), Ok(f64::NEG_INFINITY));
         assert_eq!(coerce_float(&s("Infinity")), Ok(f64::INFINITY));
+    }
+
+    #[test]
+    fn float_accepts_overflow_produced_infinity_from_numeral_matches_conda_per_a1() {
+        // "1e400" is an *ordinary* numeral, not one of the explicitly-spelled inf/infinity/nan
+        // tokens tested above -- but f64's magnitude overflow has a standard, universal IEEE-754
+        // outcome (+-inf) that real conda's `float()` produces too, so this crate deliberately
+        // does NOT reject it (unlike `Int`'s i64 overflow, which has no such standard fallback
+        // value and IS rejected -- see `int_rejects_out_of_i64_range_numeral_string_per_a1`
+        // above, and spec.md's Assumption A1 for the full int/float rationale). This is the
+        // behavior a since-revised PR review comment on `parse_float_literal` flagged as a bug;
+        // it's intentional, and this test pins it so it isn't "fixed" again by accident.
+        assert_eq!(coerce_float(&s("1e400")), Ok(f64::INFINITY));
+        assert_eq!(coerce_float(&s("-1e400")), Ok(f64::NEG_INFINITY));
+        // A 321-digit plain (non-scientific-notation) numeral overflows identically.
+        let bignum = "1".to_string() + &"0".repeat(320);
+        assert_eq!(coerce_float(&s(&bignum)), Ok(f64::INFINITY));
     }
 
     #[test]

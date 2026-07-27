@@ -422,8 +422,8 @@ enum ValueKind {
     NullableBool,         // (bool, None)
     SslVerifyKind,        // (str, bool), return_string passthrough
     BoolOrIntKind,        // (bool, int) — local_repodata_ttl, narrower vocab
-    Int,
-    Float,                // both A1 range-checked
+    Int,                   // A1 range-checked: over-i64 magnitude rejected
+    Float,                 // A1: over-f64 magnitude overflows to +-inf, NOT rejected (unlike Int)
     PlainString,          // str
     NullableString,       // (str, None); "none" (case-insensitive) -> null
     Enum(EnumKind),        // ChannelPriority | PathConflict | SafetyChecks | SatSolver

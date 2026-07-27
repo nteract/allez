@@ -504,7 +504,9 @@ testable in isolation (Constitution II/VIII). The exact rule set to port:
   for `ssl_verify` (§2.2, §8 items 8/12/13).
 - **numeric** (`int`, `float`): `int()`/`float()` vocabularies incl. PEP-515 single underscores,
   leading zeros, truncation toward zero, float-only decimals/scientific/`nan`/`inf`; **plus the A1
-  `i64`/`f64` range check** (§8 item 14).
+  `i64` range check for integers** — over-`i64` numerals are rejected, but over-`f64` numerals are
+  *not* (they overflow to `+-inf`, matching conda and IEEE-754, per A1's int/float distinction)
+  (§8 item 14).
 - **`(bool,int)`** `local_repodata_ttl`: the *narrower* `_Regex` boolean vocabulary, not `boolify`
   (§8 items 6/11).
 - **enum** value-or-name lookup, case-sensitive; `channel_priority` bool/boolish shim (§2.3).

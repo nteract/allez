@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # assemble-jira-context.sh
 #
-# Assembles <feature_dir>/context.md from the three research reports written
-# by the Jira/Slack/link-following subagent steps in speckit.specify.md:
-#   research/fetch_parent_and_siblings.md
-#   research/slack_search.md
-#   research/follow_links.md
+# Assembles <feature_dir>/context-summary.md from the three research reports
+# written by the Jira/Slack/link-following subagent steps in
+# speckit.specify.md:
+#   context-files/fetch_parent_and_siblings.md
+#   context-files/slack_search.md
+#   context-files/follow_links.md
 #
 # Ported from the require-jira Spec Kit extension's assemble-context.sh,
 # decoupled from its feature.json/harness state machine — this is a plain
@@ -23,10 +24,10 @@ fi
 FEATURE_DIR="$1"
 TICKET_KEY="$2"
 
-TICKET_REPORT="${FEATURE_DIR}/research/fetch_parent_and_siblings.md"
-SLACK_REPORT="${FEATURE_DIR}/research/slack_search.md"
-LINKS_REPORT="${FEATURE_DIR}/research/follow_links.md"
-CONTEXT_MD="${FEATURE_DIR}/context.md"
+TICKET_REPORT="${FEATURE_DIR}/context-files/fetch_parent_and_siblings.md"
+SLACK_REPORT="${FEATURE_DIR}/context-files/slack_search.md"
+LINKS_REPORT="${FEATURE_DIR}/context-files/follow_links.md"
+CONTEXT_MD="${FEATURE_DIR}/context-summary.md"
 
 if [[ ! -f "$TICKET_REPORT" ]]; then
     echo "ERROR: ticket report not found: $TICKET_REPORT" >&2
@@ -58,7 +59,7 @@ extract_section() {
 }
 
 # ---------------------------------------------------------------------------
-# Assemble context.md
+# Assemble context-summary.md
 # ---------------------------------------------------------------------------
 {
     echo "# Context for ${TICKET_KEY}"
@@ -175,4 +176,4 @@ extract_section() {
 
 } > "$CONTEXT_MD"
 
-echo "context.md assembled: $CONTEXT_MD"
+echo "context-summary.md assembled: $CONTEXT_MD"

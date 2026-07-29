@@ -158,7 +158,7 @@ Given that feature description, do this:
       > the same way; note if the result was capped at 50).
       >
       > Write a markdown report to
-      > `<feature_dir>/research/fetch_parent_and_siblings.md` with sections:
+      > `<feature_dir>/context-files/fetch_parent_and_siblings.md` with sections:
       > `## Main Ticket` (metadata table + `### Description` + `### Recent
       > Comments (last 5)` + `### Sub-tasks` table), `## Parent / Epic`,
       > `## Sibling Tickets` (table, or "No sibling tickets found."). Then
@@ -173,7 +173,7 @@ Given that feature description, do this:
    c. **Search Slack** (skip if Slack was reported disconnected in step a) —
       spawn a subagent with this prompt:
 
-      > Read `<feature_dir>/research/fetch_parent_and_siblings.md` for
+      > Read `<feature_dir>/context-files/fetch_parent_and_siblings.md` for
       > context. Devise up to 5 `sesame_slack_search` queries most likely to
       > surface discussion of this ticket (always include `<JIRA_TICKET>`
       > itself). Run them (count=50 each). Read the results, then optionally
@@ -184,7 +184,7 @@ Given that feature description, do this:
       >
       > Group matched messages by thread, ordered chronologically by each
       > thread's earliest match. Write
-      > `<feature_dir>/research/slack_search.md` with one `##` subsection per
+      > `<feature_dir>/context-files/slack_search.md` with one `##` subsection per
       > thread (channel name, earliest-match date/permalink, matched
       > messages only — non-matching replies are omitted). If nothing was
       > found, write "No Slack messages found. Queries tried: ...". Reply
@@ -195,8 +195,8 @@ Given that feature description, do this:
 
    d. **Follow links** — spawn a subagent with this prompt:
 
-      > Read `<feature_dir>/research/fetch_parent_and_siblings.md` and
-      > `<feature_dir>/research/slack_search.md` (if it exists). Scan both
+      > Read `<feature_dir>/context-files/fetch_parent_and_siblings.md` and
+      > `<feature_dir>/context-files/slack_search.md` (if it exists). Scan both
       > for URLs to: Confluence pages, GitHub issues/PRs/files, Google
       > Docs/Sheets/Slides, Miro boards, Loom videos, Gmail messages.
       > Deduplicate. Cap at 5 distinct URLs per service and 20 total fetches.
@@ -207,7 +207,7 @@ Given that feature description, do this:
       > `sesame_loom_get_video`, `sesame_gmail_get_message`). Skip (soft-fail)
       > any URL that errors or matches no pattern.
       >
-      > Write `<feature_dir>/research/follow_links.md` with one `##`
+      > Write `<feature_dir>/context-files/follow_links.md` with one `##`
       > subsection per service that had a successful fetch (title/link + a
       > short excerpt per item). If nothing was found or fetched, write "No
       > linked resources were found or fetched." Reply with ONE paragraph
@@ -215,16 +215,16 @@ Given that feature description, do this:
 
       Never let this step block the command.
 
-   e. **Assemble `context.md`**: run
+   e. **Assemble `context-summary.md`**: run
       `.specify/scripts/bash/assemble-jira-context.sh "<feature_dir>"
       "<JIRA_TICKET>"`. This compiles the three research reports above into
-      `<feature_dir>/context.md` (ticket summary, description, comments,
+      `<feature_dir>/context-summary.md` (ticket summary, description, comments,
       parent/epic, siblings, sub-tasks, Slack discussion, linked resources —
       sections that found nothing collapse to a one-line "none found").
       If the script exits non-zero, report the error but do not abort the
-      command — spec writing can still proceed without `context.md`.
+      command — spec writing can still proceed without `context-summary.md`.
 
-   f. Read `<feature_dir>/context.md` (if it was produced) before writing the
+   f. Read `<feature_dir>/context-summary.md` (if it was produced) before writing the
       spec in step 6 below, and ground the spec in it.
 
 4. Load the resolved active `spec-template` file to understand required sections.
@@ -389,7 +389,7 @@ Check if `.specify/extensions.yml` exists in the project root.
 Report completion to the user with:
 - `SPECIFY_FEATURE_DIRECTORY` — the feature directory path
 - `SPEC_FILE` — the spec file path
-- `JIRA_TICKET` and `context.md` path — if a ticket was resolved and cross-service context was gathered (step 3b)
+- `JIRA_TICKET` and `context-summary.md` path — if a ticket was resolved and cross-service context was gathered (step 3b)
 - Checklist results summary
 - Readiness for the next phase (`/speckit.clarify` or `/speckit.plan`)
 

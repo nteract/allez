@@ -76,6 +76,8 @@ Two items raised by this pass were deliberately **not** changed, and are recorde
 - **`T045`/`T046`'s relationship was one-directional in wording but is actually mutual**: `T045`'s `CleanupGuard` needs `T046`'s `OwnerLock` type just as much as `T046`'s reclamation scan needs `T045`'s `remove_prefix_dir()` function — normal for two modules in one Rust crate, not a build-order defect, but "land T045 first" undersold it. Reworded to match the existing `T015`/`T016` "author together" precedent.
 - **Two minor wording staleness items**: the Foundational-phase blanket TDD statement still said "T006–T014" after `T007`/`T016` were carved out as pure declarations (round 5) and `T015` was folded in elsewhere; narrowed to name the actual behavioral set.
 
+**Seventh revision note (post-implementation, "Remove auto-reaping of environments")**: after this task list's own T001–T066 were implemented and merged, a separate, subsequent product decision removed automatic teardown of every kind — see `spec.md`'s User Story 2 (rewritten) and `research.md`'s "Explicit reap, no automatic reaping" decision. This landed as its own commit outside the normal `/speckit.tasks` workflow (no new task IDs were minted for it), so it is recorded here rather than silently leaving this file describing code that no longer exists. Concretely, this removed `src/ephemeral/handle.rs`, `src/ephemeral/state.rs`, `src/ephemeral/orphan.rs`, and `src/ephemeral/orphan_files.rs` in full, and added `src/ephemeral/reap.rs` in their place. **Every task below in Phase 4 ("User Story 2 - Environment cleans itself up after use") describes that now-removed design** — `EphemeralEnvironmentHandle`, `signal_teardown()`, `await_ready()`/`await_torn_down()`, `LifecycleState`, `CleanupGuard`, `.owner.lock`/`.root.lock`, `reclaim_orphaned_environments()`, and `ReclamationStatus`/`OrphanReclamationOutcome` no longer exist in the codebase. Phase 4's tasks are left in place, marked superseded at the phase heading, as a historical record of work that was completed and later deliberately replaced, not silently deleted from this file. **Phase 7's `T063`–`T066` are likewise moot**: all four name specific line ranges in `src/ephemeral/orphan_files.rs` and `src/ephemeral/mod.rs`'s now-removed creation-task closure, both of which no longer exist in that shape; see the note at Phase 7 itself. A new **Phase 8** below lists the tasks that describe the actual, current explicit-reap behavior and its test coverage (`tests/support/user_story_2_reap.rs`), matching `spec.md`'s rewritten User Story 2 — this is the phase to consult for what the codebase currently does, not Phase 4.
+
 ## Format: `[ID] [P?] [Story] Description`
 
 - **[P]**: Can run in parallel (different files, no dependencies)
@@ -110,7 +112,7 @@ Single Rust package (`allez`) at the repository root. This feature adds `src/lib
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete.
 
 - [X] T006 [P] Add a `CategorizedError` trait (`fn category(&self) -> &'static str`, supertrait `std::error::Error`) to `src/error.rs` and implement it for the existing `AllezError`, per `contracts/ephemeral_env_api.md`'s cross-cutting contract. TDD: write a test asserting `AllezError` (e.g. `MissingArgument`) satisfies the trait and returns its existing category string, confirm it fails to compile against the not-yet-added trait, then add the trait and impl.
-- [X] T007 [P] Create `src/ephemeral/mod.rs` declaring the internal module tree (`paths`, `channels`, `defaults`, `error`, `solve`, `install`, `permissions`, `cleanup`, `orphan`, `lifecycle`, `events`) and re-exporting the public API surface (`create_ephemeral_environment`, `reclaim_orphaned_environments`, and the public types) per `contracts/ephemeral_env_api.md`.
+- [X] T007 [P] Create `src/ephemeral/mod.rs` declaring the internal module tree (`paths`, `channels`, `defaults`, `error`, `solve`, `install`, `permissions`, `cleanup`, `orphan`, `lifecycle`, `events`) and re-exporting the public API surface (`create_ephemeral_environment`, `reclaim_orphaned_environments`, and the public types) per `contracts/ephemeral_env_api.md`. **(Module list and re-exports superseded — see the Seventh revision note: `orphan` was later deleted and replaced by `reap`, and `reclaim_orphaned_environments` was replaced by `reap_ephemeral_environments`.)**
 - [X] T008 [P] Implement `src/ephemeral/error.rs` using TDD (write the tests below first, confirm they fail to compile, then implement): `#[non_exhaustive] EphemeralEnvError` with exactly the five FR-010 variants (`NoChannelsConfigured`, `UnresolvablePackage { package }`, `IntegrityVerificationFailed { package }`, `UnwritableLocation`, `TeardownFailed`) implementing `CategorizedError` (T006) and `Display`; `CreationFailure { error, cleanup_error }` with `Display`/`std::error::Error` impls (`source()` returns `error`); `ActivationError { message }`. Tests: each `EphemeralEnvError` variant's `category()` returns its documented fixed string; `CreationFailure`'s `Display` renders the single-failure form (`cleanup_error: None`) and the dual-failure form (`"{error} (cleanup also failed: {cleanup})"`); `CreationFailure` implements `std::error::Error` with `source()` returning the original error. Per `data-model.md`.
 - [X] T009 [P] Implement `src/ephemeral/channels.rs`'s core types using TDD: `ChannelConfig { channels, channel_priority, allowed_channels, denied_channels }`, `ChannelSpec { url_or_name }`, `#[non_exhaustive] ChannelPriorityMode { Strict, Flexible, Disabled }` mirroring `condarc::ChannelPriority`; `ChannelConfig::from_urls(urls: Vec<String>) -> Self`; `redact_channel_url(url: &str) -> String` stripping `user:pass@` userinfo and `/t/<token>/`-style conda-token path segments. **Also implement the empty-`channels` fallback (FR-015, new — see `spec.md`'s Session 2026-07-28 clarification)**: a pure function, applied before the allow/deny filter (T010) ever runs, that substitutes `vec![ChannelSpec { url_or_name: "defaults".to_string() }]` when the input `channels` list is empty, and returns the input unchanged otherwise — a fixed, built-in constant this feature owns itself, the same category of decision as `DEFAULT_PACKAGES` (FR-005), not a `.condarc`-derived value. Tests first: `redact_channel_url()` strips userinfo and conda-token segments and leaves an already-clean URL untouched; `ChannelConfig::from_urls()` defaults to `Strict` priority and empty allow/deny lists; the fallback function maps an empty `channels` list to exactly `["defaults"]` and leaves any non-empty list untouched (including a single-entry list, to confirm this isn't confused with "empty"). Per `data-model.md`/`research.md`.
 - [X] T010 [P] Implement the effective-channel allow/deny filter function in `src/ephemeral/channels.rs` using TDD: drops any channel in `denied_channels`, then (if `allowed_channels` is non-empty) drops any channel not in it; a channel in both lists is denied; returns the filtered, still-ordered list (an empty result is representable — `solve.rs`, T026, maps it to `NoChannelsConfigured`). Tests first: deny-then-allow filtering order (a channel in both is denied); empty `allowed_channels` imposes no restriction; ordering of the surviving channels is preserved.
@@ -132,6 +134,22 @@ Single Rust package (`allez`) at the repository root. This feature adds `src/lib
 **Independent Test**: Request an environment for a small, known-resolvable package list against the fixture channel and verify the environment is created in a system-managed location, the requested packages are installed and usable, an empty channel list falls back to the built-in `defaults` channel rather than failing (FR-015), and failure cases (unresolvable package, a channel list emptied by allow/deny filtering, corrupted checksum) fail cleanly with no partial state.
 
 **Note on dependencies (mirrors Phase 4's own note below)**: T028's implementation task depends directly on T045 (`cleanup.rs`) and T046 (`orphan.rs`) — two files organizationally listed under "Implementation for User Story 2" — because FR-004's "no partially-installed environment is left on disk" guarantee that T019/T024/T038 test is itself a User Story 1 acceptance scenario (Scenario 3), and because FR-008's orphan-liveness design requires the `.owner.lock`/`.root.lock` publication sequence to happen as part of creation itself, not as an afterthought bolted on in Phase 4. Only T045's `remove_prefix_dir()` primitive (plus the `CleanupGuard` type T028 constructs from it) and T046's `publish_environment()` primitive are Phase 3 prerequisites this way; `cleanup.rs`'s and `orphan.rs`'s *other* responsibilities (the live-handle registry, wiring the `CleanupGuard`'s `Drop` to a successfully-`Ready` environment, and the reclamation *scan* itself) remain genuinely User Story 2 scope and are wired by T047/T048, not T028.
+
+**Note (Seventh revision, post-"Remove auto-reaping of environments")**:
+unlike Phase 4, this phase's own scenarios (creation succeeding or
+failing) remain accurate — User Story 1 is unaffected by the reap
+decision. Only the *API surface* individual tasks below describe is
+stale: `create_ephemeral_environment` is now a plain `async fn` that
+resolves directly to `Result<ReadyEnvironment, CreationFailure>`, so
+wherever a task below says `await_ready()` or refers to
+`EphemeralEnvironmentHandle`, read it as
+`create_ephemeral_environment(...).await` directly — the underlying
+scenario each task describes (a resolvable package list installing
+successfully, an unresolvable package failing cleanly, a corrupted
+checksum being rejected, and so on) is still exactly what the current
+test suite (`tests/support/user_story_1_creation.rs`,
+`tests/support/user_story_1_failures.rs`) exercises, just through the
+simpler, handle-free API.
 
 ### Tests for User Story 1
 
@@ -159,7 +177,9 @@ Single Rust package (`allez`) at the repository root. This feature adds `src/lib
 
 ---
 
-## Phase 4: User Story 2 - Environment cleans itself up after use (Priority: P1)
+## Phase 4: User Story 2 - Environment cleans itself up after use (Priority: P1) — SUPERSEDED, see the Seventh revision note above and Phase 8 below
+
+**Superseded in full by the "Remove auto-reaping of environments" commit — every task in this phase describes automatic-teardown/orphan-reclamation code (`EphemeralEnvironmentHandle`, `LifecycleState`, `CleanupGuard`, `orphan.rs`, `reclaim_orphaned_environments()`) that no longer exists. Left in place as a historical record of completed-then-replaced work; do not use this phase to understand current behavior — see Phase 8 instead.**
 
 **Goal**: Every ephemeral environment is reliably removed — on explicit signal, on normal process exit or a crash/forceful kill, or via orphan reclamation on the next creation — without ever touching a still-active sibling.
 
@@ -223,7 +243,7 @@ Single Rust package (`allez`) at the repository root. This feature adds `src/lib
 
 **Purpose**: Quality gates and documentation obligations that span every story above.
 
-- [X] T054 [P] Add `///` doc comments to every public item under `src/ephemeral/` (`mod.rs` re-exports, `EphemeralEnvironmentHandle`, `ReadyEnvironment`, `InstalledPackage`, `EphemeralEnvError`, `CreationFailure`, `ActivationError`, `ChannelConfig`, `ChannelSpec`, `ChannelPriorityMode`, `RequestedPackages`, `PackageSpec`, `InvalidPackageSpec`, `ReclamationStatus`, `OrphanReclamationOutcome`, `create_ephemeral_environment`, `reclaim_orphaned_environments`) per Constitution VI; confirm `cargo doc` builds with zero warnings.
+- [X] T054 [P] Add `///` doc comments to every public item under `src/ephemeral/` (`mod.rs` re-exports, `EphemeralEnvironmentHandle`, `ReadyEnvironment`, `InstalledPackage`, `EphemeralEnvError`, `CreationFailure`, `ActivationError`, `ChannelConfig`, `ChannelSpec`, `ChannelPriorityMode`, `RequestedPackages`, `PackageSpec`, `InvalidPackageSpec`, `ReclamationStatus`, `OrphanReclamationOutcome`, `create_ephemeral_environment`, `reclaim_orphaned_environments`) per Constitution VI; confirm `cargo doc` builds with zero warnings. **(Item list superseded — see the Seventh revision note: `EphemeralEnvironmentHandle`, `ReclamationStatus`, and `OrphanReclamationOutcome` no longer exist, `reclaim_orphaned_environments` was replaced by `reap_ephemeral_environments`, and `ReapOutcome` needs the same doc-comment treatment this task originally intended for the types it replaced.)**
 - [X] T055 [P] Run `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and `RUSTDOCFLAGS='-D warnings' cargo doc --no-deps` across `src/ephemeral/`, the updated `src/lib.rs`/`src/main.rs`, and `tests/ephemeral_env.rs`; fix every finding. The rustdoc gate matters specifically here — it is the exact gate that blocked the last merged PR in this repo, and this feature's new `src/lib.rs` (T002) inherits `#![warn(missing_docs)]` from `src/main.rs` (also T002), so new undocumented public items will trip it.
 - [X] T056 Run the full `cargo test --all` suite (and, separately, `cargo test --all --features network-tests` for T061) and cross-check every test added in T006/T008/T009/T010/T011/T012/T013/T014/T015/T017–T019/T021–T025/T030–T044/T049–T052/T059/T061/T062 against `spec.md`'s acceptance scenarios and `quickstart.md`'s enumerated list to confirm 100% spec test coverage (Constitution VIII), with specific attention to FR-011/SC-006 (T024), FR-008/SC-003's exit-time path (T032), FR-002's ordering (T023), the `await_ready()`-survives-early-teardown fix (T059), and the FR-015 defaults-fallback path (T009/T061/T062, T020 retired — see Phase 3's own note) — all five had zero coverage or existed as unfixed gaps before this revision; record any remaining gap found and close it before considering this task done.
 - [X] T057 Execute `quickstart.md`'s manual, per-platform validation steps at least once each: the owner-only-permission `stat`/`icacls` checks on Unix/Windows, and the orphan-reclamation `SIGKILL`/`taskkill` walkthrough (steps 1–7 in `quickstart.md` § Validating orphan reclamation manually); record the observed outcome for each step.
@@ -325,7 +345,55 @@ Unlike a typical multi-story feature with separable HTTP endpoints or UI screens
 
 ## Phase 7: Convergence
 
+**Note (Seventh revision, post-"Remove auto-reaping of environments")**:
+T063 below is now moot — `src/ephemeral/orphan_files.rs` (and the
+`environment_ids()` function it names) was deleted in full by that
+commit, along with the rest of the orphan-detection machinery; there is
+no candidate-enumeration/liveness-classification code left for its fix to
+apply to. `reap.rs`'s own `environment_ids()` (a different function, in a
+different, still-current module) has no analogous silent-`continue`
+concern to begin with — see `reap.rs`'s own doc comment. T064 and T066
+remain accurate against the current codebase as written. T065 references
+`finish_failure_without_prefix()`, a function that no longer exists under
+that name after `mod.rs`'s own refactor — but the underlying fix it
+describes (a root-resolution failure must not emit a synthetic
+`"teardown"` success event) is still in effect in the current code: a
+root-resolution failure emits only a `"create"`-operation failure event
+and returns, with no `"teardown"` event of any kind.
+
 - [X] T063 In `src/ephemeral/orphan_files.rs`'s `environment_ids()` (both the `#[cfg(unix)]` variant at lines 72-95 and the `#[cfg(not(unix))]` variant at lines 137-153), stop silently discarding filesystem-enumeration errors on individual candidate entries (the Unix `statat` failure at line 87 and the non-Unix `read_dir`/file-type/filename `filter_map` chain at lines 140-152): surface each such entry as a distinct `Unknown` reclamation outcome (or an explicit scan-failure) rather than a silent `continue`/filter-out, so no orphan candidate is ever left undetected per FR-008 (partial)
 - [X] T064 In `src/ephemeral/mod.rs`'s creation flow (around lines 106-111), emit a distinct `"install"`-operation failure `EphemeralLifecycleEvent` when `solve::solve_packages()` fails (channel/dependency resolution failure), mirroring the existing `"install"` failure event already emitted for `install::install_packages()` failures at lines 120-121, so every lifecycle step (create, install, teardown) — including a solve-stage failure — produces its own event per FR-013 (partial)
 - [X] T065 In `src/ephemeral/mod.rs`'s `finish_failure_without_prefix()` (lines 155-161), stop unconditionally emitting a synthetic `"teardown"` success event when root resolution itself failed and no environment directory or teardown operation ever existed; either omit the event or replace it with a representation that accurately reflects that no teardown ran, per FR-013 (partial)
 - [X] T066 In `src/ephemeral/install.rs`'s `validate_file_record()` (lines 110-137), stop treating a local `file://`-scheme package record that declares neither a SHA-256 nor an MD5 checksum as automatically verified (the `(None, None) => Ok(true)` arm at line 127); reject such a record as a failed integrity check, or explicitly document and test this as a named, ratified exception to FR-011/SC-006 if the team decides checksum-less local records are intentionally out of scope (partial)
+
+---
+
+## Phase 8: Explicit reap (supersedes Phase 4; see the Seventh revision note)
+
+**Goal**: A successfully created ephemeral environment is never removed
+automatically; a caller reclaims disk space only by explicitly calling
+`reap_ephemeral_environments()`, which removes every ephemeral
+environment it finds unconditionally, processing each one independently.
+
+**Independent Test**: Create an environment and drop every reference to
+it, confirming its directory is untouched; separately, create one or more
+environments and call `reap_ephemeral_environments()`, confirming every
+one is removed; separately, call it with nothing to remove and confirm
+it is a no-op.
+
+This phase's tasks describe work already implemented (by the "Remove
+auto-reaping of environments" commit) outside the normal `/speckit.tasks`
+sequence; they are recorded here, marked done, purely for traceability
+between `spec.md`'s rewritten User Story 2 and the tests that actually
+exist, matching this file's own "every acceptance scenario must map to at
+least one task" convention (see Notes below).
+
+- [X] T067 [P] [US2] Implement `src/ephemeral/reap.rs`'s `reap_all()` (exposed publicly as `reap_ephemeral_environments()` in `mod.rs`): lists every entry directly under the verified root's `envs/` directory whose name parses as an `EnvironmentId`, calls `cleanup.rs`'s `remove_prefix_dir()` on each, and collects one `ReapOutcome::Removed`/`RemovalFailed` per entry — no liveness check of any kind, and a failure removing one entry never prevents or affects any other entry's own outcome (FR-008/FR-009).
+- [X] T068 [P] [US2] Integration test in `tests/support/user_story_2_reap.rs`: `a_ready_environment_is_not_torn_down_on_its_own` — create successfully, drop every reference to the `ReadyEnvironment`, confirm the directory is still present (User Story 2, Scenario 1).
+- [X] T069 [P] [US2] Integration test in `tests/support/user_story_2_reap.rs`: `reap_removes_a_previously_created_environment_and_emits_a_teardown_event` — create, call `reap_ephemeral_environments()`, confirm `ReapOutcome::Removed` and a `"teardown"`-operation `EphemeralLifecycleEvent` with `outcome: "success"` for that environment's own `environment_id` (User Story 2, Scenario 2; SC-002/SC-008).
+- [X] T070 [P] [US2] Integration test in `tests/support/user_story_2_reap.rs`: `reap_removes_every_environment_regardless_of_how_many_exist` — create two environments, call `reap_ephemeral_environments()` once, confirm both are removed and reported (User Story 2, Scenario 2; FR-009).
+- [X] T071 [P] [US2] Integration test in `tests/support/user_story_2_reap.rs`: `reaping_an_empty_root_returns_no_outcomes` — call `reap_ephemeral_environments()` with nothing on disk, confirm `Ok(vec![])` (User Story 2, Scenario 4; SC-007).
+- [X] T072 [P] [US2] Integration test in `tests/support/user_story_2_reap.rs`: `reaping_twice_in_a_row_is_a_no_op_the_second_time` — create one environment, reap, then reap again immediately, confirm the second call returns `Ok(vec![])` (User Story 2, Scenario 5; SC-007).
+- [X] T073 [P] [US2] Manual smoke test in `examples/ephemeral_smoke.rs`: create against the local fixture channel, confirm the environment persists after creation, call `reap_ephemeral_environments()`, confirm it is then gone — the end-to-end illustration `quickstart.md`'s own manual smoke test section documents.
+
+**Checkpoint**: `spec.md`'s rewritten User Story 2 is fully covered by passing tests; Phase 4's superseded tasks above describe no code that still exists.

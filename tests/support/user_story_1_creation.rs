@@ -17,12 +17,13 @@ async fn resolvable_packages_are_installed_and_the_probe_is_usable() {
     let requested = ["fixture-default-alpha", "fixture-probe"];
 
     // When
-    let handle = create_ephemeral_environment(
+    let ready = create_ephemeral_environment(
         package_specs(&requested),
         root_fixture_config(ChannelPriorityMode::Strict),
         None,
-    );
-    let ready = handle.await_ready().await.unwrap();
+    )
+    .await
+    .unwrap();
 
     // Then
     assert!(ready.location.is_dir());
@@ -53,7 +54,6 @@ async fn empty_package_list_installs_built_in_defaults() {
         root_fixture_config(ChannelPriorityMode::Strict),
         None,
     )
-    .await_ready()
     .await
     .unwrap();
 
@@ -78,7 +78,6 @@ async fn flexible_channel_priority_solves_successfully() {
         root_fixture_config(ChannelPriorityMode::Flexible),
         None,
     )
-    .await_ready()
     .await
     .unwrap();
 
@@ -98,7 +97,6 @@ async fn strict_channel_priority_selects_the_first_channels_version() {
 
     // When
     let ready = create_ephemeral_environment(package_specs(&["fixture-priority"]), config, None)
-        .await_ready()
         .await
         .unwrap();
 
@@ -115,20 +113,22 @@ async fn lifecycle_events_include_consistent_ids_packages_and_durations() {
     let capture = EventCapture::install();
 
     // When
-    let successful_handle = create_ephemeral_environment(
+    let ready = create_ephemeral_environment(
         package_specs(&["fixture-probe"]),
         root_fixture_config(ChannelPriorityMode::Strict),
         None,
-    );
-    let successful_id = successful_handle.id().to_string();
-    let _ready = successful_handle.await_ready().await.unwrap();
-    let failed_handle = create_ephemeral_environment(
+    )
+    .await
+    .unwrap();
+    let successful_id = ready.id.to_string();
+    let failure = create_ephemeral_environment(
         package_specs(&["fixture-corrupt-checksum"]),
         root_fixture_config(ChannelPriorityMode::Strict),
         None,
-    );
-    let failed_id = failed_handle.id().to_string();
-    let _failure = failed_handle.await_ready().await.unwrap_err();
+    )
+    .await
+    .unwrap_err();
+    let failed_id = failure.id.to_string();
 
     // Then
     let events = capture.events();
@@ -161,13 +161,14 @@ async fn a_solve_stage_failure_still_emits_an_install_failure_event() {
     let capture = EventCapture::install();
 
     // When
-    let handle = create_ephemeral_environment(
+    let failure = create_ephemeral_environment(
         package_specs(&["fixture-does-not-exist"]),
         root_fixture_config(ChannelPriorityMode::Strict),
         None,
-    );
-    let id = handle.id().to_string();
-    let _failure = handle.await_ready().await.unwrap_err();
+    )
+    .await
+    .unwrap_err();
+    let id = failure.id.to_string();
 
     // Then
     let install_failure = capture.events().into_iter().find(|event| {
@@ -199,7 +200,6 @@ async fn empty_channels_fallback_resolves_against_real_defaults_channel() {
         ChannelConfig::from_urls(Vec::new()),
         None,
     )
-    .await_ready()
     .await
     .unwrap();
 

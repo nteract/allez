@@ -1,7 +1,6 @@
-//! `EphemeralEnvironmentHandle`, `LifecycleState`, `ReadyEnvironment`,
-//! `InstalledPackage`.
+//! `EnvironmentId`, `InstalledPackage`, `ReadyEnvironment`.
 
-use std::{fmt, path::PathBuf, sync::Arc};
+use std::{fmt, path::PathBuf};
 
 use rattler_conda_types::Platform;
 use rattler_shell::{
@@ -10,12 +9,7 @@ use rattler_shell::{
 };
 use ulid::Ulid;
 
-use super::{channels::redact_channel_url, cleanup::CleanupGuard, error::ActivationError};
-
-pub use super::handle::{EphemeralEnvironmentHandle, ReclamationStatus};
-pub(crate) use super::state::CleanupOutcome;
-#[cfg(test)]
-pub(crate) use super::state::{CreationOutcomeCell, LifecycleState, TeardownOutcome};
+use super::{channels::redact_channel_url, error::ActivationError};
 
 /// A unique identifier for one ephemeral environment lifecycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -68,7 +62,10 @@ impl fmt::Debug for InstalledPackage {
 
 #[cfg(test)]
 mod tests {
-    use super::InstalledPackage;
+    use std::fs;
+
+    use super::{InstalledPackage, ReadyEnvironment};
+    use crate::ephemeral::error::ActivationError;
 
     #[test]
     fn installed_package_debug_redacts_channel_credentials() {
@@ -84,9 +81,56 @@ mod tests {
         assert!(!message.contains("token-123"));
         assert!(message.contains("https://repo.example/channel"));
     }
+
+    #[test]
+    fn activation_environment_when_prefix_has_executables_includes_prefix_path() {
+        // Given
+        let temporary_directory = tempfile::tempdir().unwrap();
+        let prefix = temporary_directory.path().join("environment");
+        #[cfg(windows)]
+        let executable_directory = prefix.join("Scripts");
+        #[cfg(not(windows))]
+        let executable_directory = prefix.join("bin");
+        fs::create_dir_all(&executable_directory).unwrap();
+        let environment = ReadyEnvironment::test_with_location(&prefix);
+
+        // When
+        let overlay = environment.activation_environment().unwrap();
+
+        // Then
+        let path = overlay
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("PATH"))
+            .map(|(_, value)| value)
+            .unwrap();
+        assert!(std::env::split_paths(path).any(|entry| entry == executable_directory));
+    }
+
+    #[test]
+    fn activation_environment_when_prefix_state_is_malformed_returns_activation_error() {
+        // Given
+        let temporary_directory = tempfile::tempdir().unwrap();
+        let prefix = temporary_directory.path().join("environment");
+        fs::create_dir_all(prefix.join("conda-meta")).unwrap();
+        fs::write(prefix.join("conda-meta/state"), "{").unwrap();
+        let environment = ReadyEnvironment::test_with_location(&prefix);
+
+        // When
+        let result = environment.activation_environment();
+
+        // Then
+        assert!(matches!(result, Err(ActivationError { .. })));
+    }
 }
 
 /// A successfully created environment and its installed packages.
+///
+/// **Not torn down automatically** — see the GEN-24 spec's "Explicit
+/// reap, no automatic reaping" decision: this value carries no cleanup
+/// guard of any kind, and dropping it (or every clone of it) has no
+/// effect on the environment's directory. The environment persists on
+/// disk until a caller explicitly calls
+/// [`super::reap_ephemeral_environments`].
 #[derive(Debug, Clone)]
 pub struct ReadyEnvironment {
     /// This environment's stable identifier.
@@ -95,11 +139,6 @@ pub struct ReadyEnvironment {
     pub location: PathBuf,
     /// Packages installed in the environment.
     pub installed_packages: Vec<InstalledPackage>,
-    #[expect(
-        dead_code,
-        reason = "ownership keeps the environment alive until the final clone drops"
-    )]
-    keep_alive: Arc<CleanupGuard>,
 }
 
 impl ReadyEnvironment {
@@ -107,13 +146,11 @@ impl ReadyEnvironment {
         id: EnvironmentId,
         location: PathBuf,
         installed_packages: Vec<InstalledPackage>,
-        keep_alive: Arc<CleanupGuard>,
     ) -> Self {
         Self {
             id,
             location,
             installed_packages,
-            keep_alive,
         }
     }
 
@@ -150,7 +187,6 @@ impl ReadyEnvironment {
             id: EnvironmentId::new(),
             location: location.into(),
             installed_packages: Vec::new(),
-            keep_alive: Arc::new(CleanupGuard::test_only()),
         }
     }
 }

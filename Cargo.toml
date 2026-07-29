@@ -27,7 +27,6 @@ rattler_virtual_packages = "4.0.0"
 rattler_shell = "0.27.11"
 ulid = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "sync"] }
-fs4 = { version = "1", features = ["sync"] }
 # Pinned to the major version `rattler_networking` (a transitive dependency
 # of `rattler`, via `astral-reqwest-middleware`/`ambient-id`) itself
 # resolves to -- confirmed via `cargo tree -i reqwest` to be 0.13, not 0.12,

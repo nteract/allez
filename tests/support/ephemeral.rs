@@ -1,6 +1,6 @@
 use std::{
     env,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{Arc, Mutex, OnceLock},
 };
 
@@ -10,8 +10,6 @@ use allez::ephemeral::{
 use rattler_conda_types::Channel;
 use tracing::{Event, Subscriber, field::Visit};
 use tracing_subscriber::{Layer, layer::Context, prelude::*, registry::LookupSpan};
-
-type CreationFailureHook = Box<dyn FnOnce() + Send>;
 
 static EVENT_CAPTURE: OnceLock<EventCapture> = OnceLock::new();
 
@@ -50,10 +48,6 @@ impl TestContext {
 
     pub(crate) fn environment_location(&self, id: impl ToString) -> PathBuf {
         self.root.join("envs").join(id.to_string())
-    }
-
-    pub(crate) fn root(&self) -> &Path {
-        &self.root
     }
 }
 
@@ -100,7 +94,6 @@ pub(crate) struct EventCapture(Arc<Mutex<CaptureState>>);
 #[derive(Default)]
 struct CaptureState {
     events: Vec<CapturedLifecycleEvent>,
-    creation_failure_hook: Option<CreationFailureHook>,
 }
 
 impl EventCapture {
@@ -117,17 +110,12 @@ impl EventCapture {
             .clone();
         let mut state = capture.0.lock().unwrap();
         state.events.clear();
-        state.creation_failure_hook = None;
         drop(state);
         capture
     }
 
     pub(crate) fn events(&self) -> Vec<CapturedLifecycleEvent> {
         self.0.lock().unwrap().events.clone()
-    }
-
-    pub(crate) fn on_creation_failure(&self, hook: impl FnOnce() + Send + 'static) {
-        self.0.lock().unwrap().creation_failure_hook = Some(Box::new(hook));
     }
 }
 
@@ -139,18 +127,7 @@ where
         let mut visitor = LifecycleEventVisitor::default();
         event.record(&mut visitor);
         if visitor.event.operation.is_some() {
-            let is_creation_failure = visitor.event.operation.as_deref() == Some("create")
-                && visitor.event.outcome.as_deref() == Some("failure");
-            let hook = {
-                let mut state = self.0.lock().unwrap();
-                state.events.push(visitor.event);
-                is_creation_failure
-                    .then(|| state.creation_failure_hook.take())
-                    .flatten()
-            };
-            if let Some(hook) = hook {
-                hook();
-            }
+            self.0.lock().unwrap().events.push(visitor.event);
         }
     }
 }
@@ -189,17 +166,4 @@ impl Visit for LifecycleEventVisitor {
             self.event.duration_ms = Some(value);
         }
     }
-}
-
-pub(crate) async fn wait_until_removed(location: &Path) {
-    for _ in 0..10_000 {
-        if !location.exists() {
-            return;
-        }
-        tokio::task::yield_now().await;
-    }
-    panic!(
-        "environment directory was not removed: {}",
-        location.display()
-    );
 }

@@ -9,37 +9,71 @@
 ## Summary
 
 Implement, as a Rust library module (no CLI wiring — that's GEN-25), the
-create → solve/install → teardown lifecycle for an unnamed, caller-unpathed
-conda environment: creation always succeeds or fails atomically, installs
+create → solve/install lifecycle for an unnamed, caller-unpathed conda
+environment: creation always succeeds or fails atomically, installs
 either the caller's explicit package list or the built-in/overridden
 default set, relies on `rattler`'s own built-in checksum verification
-before install, restricts the environment's location to the owning user,
-and guarantees the directory is eventually removed (immediately on
-signal/normal exit where possible, via orphan-reclamation-on-next-create
-otherwise) — never leaving an undetected orphan and never affecting a
-concurrently-running sibling environment. Technical approach: build
-directly on the native Rust `rattler` ecosystem (the same libraries `pixi`
-uses) for repodata fetching, solving, and checksum-verified install/link,
-rather than shelling out to `conda`/`mamba`; layer owner-only permissions
-(applied atomically at directory-creation time) and an OS-level
-advisory-file-lock orphan-liveness check on top, since `rattler` itself
+before install, and restricts the environment's location to the owning
+user. **Removal is explicit, not automatic (revised — see the
+"Explicit reap, no automatic reaping" revision note immediately
+below)**: a successfully created environment is never torn down by this
+feature on its own — not on a signal, not on process exit, not via any
+crash/orphan-detection mechanism — it simply persists on disk until a
+caller invokes a separate, standalone reap operation that removes every
+ephemeral environment it finds for the current local user account and
+`allez` installation, unconditionally, without checking whether any of
+them is still in use. Technical approach: build directly on the native
+Rust `rattler` ecosystem (the same libraries `pixi` uses) for repodata
+fetching, solving, and checksum-verified install/link, rather than
+shelling out to `conda`/`mamba`; layer owner-only permissions (applied
+atomically at directory-creation time) on top, since `rattler` itself
 provides neither. **No signal handler of any kind is installed** —
 `allez` is invoked by an AI agent inside an externally-established
 sandbox, never directly by a human at a terminal, so there is no
-Ctrl-C/SIGINT for this feature to ever catch; exit cleanup relies solely
-on an RAII `Drop` guard plus that same orphan-liveness check, not a
-signal handler (see `research.md`).
+Ctrl-C/SIGINT for this feature to ever catch; there is also no RAII
+`Drop`-based cleanup guard any more (see the revision note below) — a
+failed creation attempt is still rolled back synchronously, as part of
+the same call that discovered the failure, but a successful one is left
+alone entirely.
 
-**Revision note**: this plan was revised after a review pass. Two
-explicit product decisions bound this revision: GEN-29 (private-channel
-authentication) is deferred in full — every auth-related design element
-from the first draft is removed, not patched — and checksum verification
-relies 100% on `rattler_cache`'s own behavior as-is, with the review's
-"verifies after extraction" observation accepted rather than fixed for
-this ticket. See `research.md`'s revision note for the full list of
-corrections (channel-config alignment with GEN-36, atomic permission
-application, orphan-metadata race, shared package cache, error/lifecycle
-model gaps, a new `src/lib.rs`, and more).
+**Revision note**: this plan was revised after a review pass, and again
+after a later, separate product decision. Two explicit product decisions
+bound the review-pass revision: GEN-29 (private-channel authentication)
+is deferred in full — every auth-related design element from the first
+draft is removed, not patched — and checksum verification relies 100% on
+`rattler_cache`'s own behavior as-is, with the review's "verifies after
+extraction" observation accepted rather than fixed for this ticket. See
+`research.md`'s revision note for the full list of corrections
+(channel-config alignment with GEN-36, atomic permission application,
+shared package cache, error/lifecycle model gaps, a new `src/lib.rs`, and
+more).
+
+**Explicit reap, no automatic reaping (later revision, supersedes every
+automatic-teardown/orphan-reclamation design element the review-pass
+revision above added)**: a subsequent, separate product decision removed
+automatic teardown entirely. There is no longer a per-environment
+teardown signal, no `EphemeralEnvironmentHandle` returned before creation
+completes, no RAII `CleanupGuard`/`Drop`-based cleanup for a successfully
+created environment, no per-environment `.owner.lock` liveness marker,
+no root-level `.root.lock` publication/reclamation serialization, and no
+`reclaim_orphaned_environments()` orphan-detection scan. `fs4` is no
+longer a dependency of this feature at all. `create_ephemeral_environment`
+is now a plain `async fn` that resolves directly to
+`Result<ReadyEnvironment, CreationFailure>` — there is no intermediate
+handle type. In its place, this ticket adds one new, standalone function,
+`reap_ephemeral_environments()`, that removes every ephemeral environment
+directory it finds under the managed root, one at a time, reporting each
+one's own outcome independently and without any liveness check at all —
+see `research.md`'s "Explicit reap, no automatic reaping" decision for
+the full rationale and `contracts/ephemeral_env_api.md` for the resulting
+public API. A creation attempt that itself fails is unaffected by this
+change: rolling back whatever partial directory a failed attempt created
+still happens automatically, synchronously, as part of the same call that
+discovered the failure (FR-004/FR-010) — only a *successfully completed*
+creation's own environment is now left alone rather than torn down
+automatically. This is a deliberate, temporary simplification, not a
+permanent design point; more automatic, safety-checked reclamation is
+expected to be revisited in a future ticket.
 
 ## Technical Context
 
@@ -51,25 +85,30 @@ model gaps, a new `src/lib.rs`, and more).
 `rattler_virtual_packages`, `rattler_shell`, `ulid` (package
 resolution/install, plus activation-environment computation for GEN-25's
 benefit, plus environment-identifier generation); `tokio` (async runtime
-these require); `fs4` (OS-level advisory file locking for definitive orphan-liveness
-detection — replaces an earlier `sysinfo`-based PID/start-time heuristic;
-see `research.md`); `reqwest` (direct dependency — `solve.rs`/`install.rs`
+these require); `reqwest` (direct dependency — `solve.rs`/`install.rs`
 construct and configure the shared HTTP client themselves, so this cannot
 be left merely transitive via `rattler_repodata_gateway`); `rustix`
 (direct dependency, `fs` + `process` features — handle-anchored directory
 creation/removal and current-user-ownership checks in `paths.rs`/
-`permissions.rs`/`cleanup.rs`; promoted from an existing transitive
-dependency via `fs4`); `tempfile` (already a
+`permissions.rs`/`cleanup.rs`); `tempfile` (already a
 dev-dependency, promoted to a normal dependency); `windows-sys`
 (Windows-only, owner-only ACLs, applied atomically at directory creation).
-See `research.md` for versions and the rationale behind each. **`ctrlc` is
+See `research.md` for versions and the rationale behind each. **`fs4` is
+not a dependency of this feature** — an earlier revision of this plan
+added it for per-environment/root-level advisory-file-locking used by
+automatic orphan detection; that whole mechanism was removed by the
+"Explicit reap, no automatic reaping" decision (see the Summary's own
+revision note above and `research.md`), so there is no liveness lock of
+any kind left for it to back. **`ctrlc` is
 not a dependency of this feature** — `allez` is invoked by an AI agent
 inside an externally-established sandbox, never directly by a human at a
 terminal, so there is no human-initiated interrupt (e.g. a terminal
-Ctrl-C) for this feature to handle; the only exit-cleanup mechanisms this
-feature needs are an RAII `Drop` guard for normal process exit and
-orphan-reclamation-on-next-create for anything a `Drop` can't catch
-(crash, `SIGKILL`, power loss) — see `research.md`.
+Ctrl-C) for this feature to handle; a failed creation attempt is rolled
+back synchronously as part of the same call that discovered the failure,
+and a successful one is left alone entirely — removed only by the
+explicit `reap_ephemeral_environments()` call a caller makes on its own
+— so there is no exit-time cleanup mechanism of any kind that a signal
+handler could usefully hook into.
 **`rattler_networking` is not added as a direct dependency** — this
 ticket adds no authentication middleware; GEN-29 owns that entirely when
 it lands. This does not mean HTTP/TLS crates are absent from the
@@ -83,23 +122,26 @@ logging pipeline.
 
 **Storage**: N/A (no database/config file produced by this feature). Files
 on disk are: (a) each ephemeral environment's own prefix directory —
-one-shot, removed on teardown — and (b) a **long-lived, shared**
-package-download cache and repodata cache, reused across every ephemeral
-environment this installation creates (not torn down per-environment; see
-`research.md` § Ephemeral location + package/repodata cache for why this
-is a correction from the first draft, and how it gives GEN-32 a real
-cold-vs-warm-cache distinction to benchmark). Both live under a single
-configurable root (`$ALLEZ_EPHEMERAL_ROOT`, falling back to a per-user,
-per-installation subdirectory of `std::env::temp_dir()`) — chosen
-specifically so a sandbox wrapping `allez` can redirect this feature's
-entire filesystem footprint to one explicitly-granted, dedicated location
-without any code change; see `research.md` § Sandbox-visible
-filesystem/process footprint.
+persists after a successful creation until an explicit
+`reap_ephemeral_environments()` call removes it (see the Summary's
+"Explicit reap, no automatic reaping" revision note above; a *failed*
+creation attempt's own partial directory is still rolled back
+immediately, unaffected by that revision) — and (b) a **long-lived,
+shared** package-download cache and repodata cache, reused across every
+ephemeral environment this installation creates (see `research.md` §
+Ephemeral location + package/repodata cache for how this gives GEN-32 a
+real cold-vs-warm-cache distinction to benchmark). Both live under a
+single configurable root (`$ALLEZ_EPHEMERAL_ROOT`, falling back to a
+per-user, per-installation subdirectory of `std::env::temp_dir()`) —
+chosen specifically so a sandbox wrapping `allez` can redirect this
+feature's entire filesystem footprint to one explicitly-granted,
+dedicated location without any code change; see `research.md` §
+Sandbox-visible filesystem/process footprint.
 
 **Testing**: `cargo test --all` (unchanged entry point). New unit tests
 alongside the code they test (`#[cfg(test)]`, per Constitution II); a new
 integration test file (`tests/ephemeral_env.rs`) exercising the real
-solve→install→teardown path against a checked-in local `file://` fixture
+solve→install→reap path against a checked-in local `file://` fixture
 channel — network-free and deterministic by construction, following the
 same "opt-in feature flag for anything that needs a live oracle" pattern
 `condarc_conformance`/`conformance-tests` already established, reused here
@@ -146,8 +188,13 @@ targets.
 (FR-004); no bespoke retry layer for transient failures (FR-010); no
 credential material in inputs, error messages, or structured events
 (FR-013); owner-only environment-location access on all four target
-platforms (FR-014); teardown-signal handling must never start more than
-one concurrent removal attempt per environment (FR-012/SC-007); this
+platforms (FR-014); a reap call MUST process each environment it finds
+independently, so a removal failure for one never prevents or affects
+another (FR-009); reap performs no liveness/in-use detection of any kind
+and removes every environment it finds unconditionally — the calling
+caller is solely responsible for only invoking it when doing so is safe
+(FR-008; see the Summary's "Explicit reap, no automatic reaping"
+revision note above); this
 feature always runs inside an externally-imposed sandbox with only
 explicitly-granted filesystem/exec visibility (spec Operating Context) —
 every path this feature's own code touches must be explicit and
@@ -175,15 +222,15 @@ multi-host scenario.
 
 | Principle | Status | Notes |
 |---|---|---|
-| I. Code Quality | PASS | Module split (`channels`, `defaults`, `error`, `solve`, `install`, `permissions`, `cleanup`, `orphan`, `lifecycle`, `events`, `paths`) keeps each file single-responsibility. **One documented `unsafe` FFI exception *category* (corrected in this revision — an earlier draft undercounted this as a single call site): raw Windows `CreateFileW`/security-descriptor FFI, sharing one `// SAFETY:`-discipline, used at three call sites** — `paths.rs`'s no-follow root secure-open/verify, `permissions.rs`'s atomically-ACL'd directory creation, and `cleanup.rs`'s pre-removal no-follow re-verify — see Complexity Tracking for the SID/ACL-lifetime and buffer/return-value obligations each site's own `// SAFETY:` comment must state. |
-| II. Testing Standards | PASS | TDD; unit tests co-located; integration tests under `tests/ephemeral_env.rs` against a local fixture channel — isolated, deterministic, fast. Now includes explicit coverage targets for the corrected `LifecycleState`'s full transition table (including the previously-missing `CreationFailed`/dual-failure paths) and the atomic-permission-creation behavior. |
+| I. Code Quality | PASS | Module split (`channels`, `defaults`, `error`, `solve`, `install`, `permissions`, `cleanup`, `reap`, `lifecycle`, `events`, `paths`) keeps each file single-responsibility — `reap.rs` replaces the earlier `orphan.rs`/`handle.rs`/`state.rs` trio the "Explicit reap, no automatic reaping" revision removed (see Summary). **One documented `unsafe` FFI exception *category* (raw Windows `CreateFileW`/security-descriptor FFI, sharing one `// SAFETY:`-discipline, used at three call sites** — `paths.rs`'s no-follow root secure-open/verify, `permissions.rs`'s atomically-ACL'd directory creation, and `cleanup.rs`'s pre-removal no-follow re-verify — see Complexity Tracking for the SID/ACL-lifetime and buffer/return-value obligations each site's own `// SAFETY:` comment must state; these three sites are unaffected by the reap revision, since `remove_prefix_dir()` is still the one anchored removal primitive both the creation-failure rollback path and `reap.rs` call. |
+| II. Testing Standards | PASS | TDD; unit tests co-located; integration tests under `tests/ephemeral_env.rs` against a local fixture channel — isolated, deterministic, fast. Coverage targets now include: the atomic-permission-creation behavior, the creation-failure rollback's own dual-failure path, and `reap_ephemeral_environments()`'s own behavior (removes every environment it finds; reports a per-environment removal failure without affecting any other environment in the same call; is a no-op when nothing remains) — the `LifecycleState` transition-table coverage an earlier revision described here no longer applies, since that type no longer exists. |
 | III. Dual-Primary Interface | N/A (justified) | This ticket ships no CLI subcommand (spec Assumptions: CLI wiring is GEN-25's job). The public API returns fully-typed `Result`s (`EphemeralEnvError` with a fixed `category()`, wrapped in `CreationFailure` where FR-010's dual-failure case applies) specifically so GEN-25 can satisfy this principle later without re-deriving categories from message text. (Wording corrected: `CreationFailure` itself does not have a `category()` — only the `EphemeralEnvError` fields inside it do; see `data-model.md`.) |
 | IV. DRY | PASS | `CategorizedError` trait (see `contracts/ephemeral_env_api.md`) lets `EphemeralEnvError` share `AllezError`'s existing category-rendering pattern. `DEFAULT_PACKAGES` defined once, in code, per FR-005. `EphemeralEnvError` is now `#[non_exhaustive]` (corrected from the first draft), resolving a direct contradiction with FR-010's "MAY add further category values as an additive, non-breaking extension" — the attribute costs nothing internally since every current match lives inside this crate; it only constrains a future external consumer. Also now matches the `#[non_exhaustive]` precedent GEN-36's `condarc::Config`/`ChannelPriority` already established in this repo. **Reconciling with GEN-22's prior review decision** ("one error type, captured in one place at the top of the CLI"): that decision governs `AllezError`'s role as the single error type the *CLI* (`src/cli/`, `main.rs`) surfaces — this ticket ships no CLI code at all (row III), so it does not yet decide how `EphemeralEnvError` and `AllezError` interoperate once a CLI consumer exists. The shared `CategorizedError` trait is deliberately the seam that lets GEN-25 keep rendering through one code path (`output::render_error`) regardless of whether it chooses to keep two enums or eventually fold `EphemeralEnvError` into `AllezError` — that choice is explicitly left to GEN-25, not decided here. |
 | V. Explicit Over Implicit | PASS | Newtypes (`EnvironmentId`, `PackageSpec`, `ChannelSpec`) instead of bare `String`s at the public boundary; `rattler`-internal types never cross that boundary. No `.unwrap()`/`.expect()` outside tests. Every `rattler`-facing path (package cache, repodata cache) is passed explicitly — never `rattler_cache::default_cache_dir()` or the gateway's own default. No implicit credential source of any kind (auth is entirely out of scope this ticket, not implicitly deferred to a crate default). |
-| VI. Documentation and Type Safety | PASS | Every public type/function gets a doc comment; `LifecycleState`'s corrected enum (internal) makes FR-012's teardown-signal state machine a fully exhaustive `match`, including the `CreationFailed` branch the first draft omitted. `cargo doc` now has real public API to document once `src/lib.rs` exists (see Project Structure) — existing doc comments on `error.rs`/`observability.rs`/`output.rs` already look sufficient; confirm with a `cargo doc` run at implementation time. |
+| VI. Documentation and Type Safety | PASS | Every public type/function gets a doc comment; `create_ephemeral_environment` is a plain, fully-typed `async fn` (no internal state machine to keep exhaustive any more — the "Explicit reap, no automatic reaping" revision removed `LifecycleState` entirely, see Summary); `ReapOutcome`'s two variants (`Removed`/`RemovalFailed`) are likewise a small, exhaustive, documented enum. `cargo doc` now has real public API to document once `src/lib.rs` exists (see Project Structure) — existing doc comments on `error.rs`/`observability.rs`/`output.rs` already look sufficient; confirm with a `cargo doc` run at implementation time. |
 | VII. No Hardcoded Values | PASS | `DEFAULT_PACKAGES` is a named, documented constant; the FR-015 empty-`channels` fallback (`"defaults"`) is likewise a named, documented constant in `channels.rs`, not an inline literal; every path this feature owns is derived from one configurable root (`$ALLEZ_EPHEMERAL_ROOT`, falling back to a per-user, per-installation temp-dir path — not a bare, collision-prone `std::env::temp_dir()`); all paths built with `PathBuf`. |
-| VIII. Mandatory 100% Spec Test Coverage | PASS (planned) | `quickstart.md` enumerates the acceptance-scenario → test mapping at a plan level; exact test IDs are the task-breakdown phase's own job. Now additionally covers: allow/deny channel filtering, the `Flexible` channel-priority mapping, the dual-failure (`CreationFailure.cleanup_error`) path (including `await_ready` correctly *not* resolving early), and lock-based `StillActive`/`Removed`/`Unknown` orphan classification (`Removed` is `OrphanReclamationOutcome`'s actual variant name for a successfully-reclaimed orphan — "orphaned" is the condition, not the reported outcome). A subsequent remediation pass added three further scenarios that previously had zero test coverage: the integrity-verification failure path (FR-011/SC-006), `Strict` channel-priority ordering itself (FR-002, distinct from the `Flexible` mapping above), and the Drop-without-signal "cleanup at exit time" path (FR-008/SC-003, distinct from both the explicit-signal and crash-then-reclaim paths). |
-| IX. Determinism & Idempotency | PASS | FR-004 explicitly scopes non-determinism to cross-run channel-availability drift. FR-012 teardown idempotency implemented via `LifecycleState`'s now-fully-exhaustive match (every state, including `CreationFailed`, has a defined `signal_teardown()` transition — see `data-model.md`). `Cargo.lock` stays committed once dependencies are added (implementation-phase task). A retried creation request intentionally producing a *new*, independent environment rather than being deduplicated against a possible prior success is a **team-approved deviation from Principle IX's literal text — validated in review, but not yet reflected in `constitution.md` itself** (amending the constitution is out of scope for a feature PR; see Governance below): each `create_ephemeral_environment` call is a new one-shot operation by product design, not a retry of a previously-completed one, so Principle IX's "re-running a completed operation MUST be idempotent" does not apply to it — the team has signed off on this reading for this plan; folding it into Principle IX's own text is a separate, dedicated constitution-amendment change, not something this table can do on its own. |
+| VIII. Mandatory 100% Spec Test Coverage | PASS (planned) | `quickstart.md` enumerates the acceptance-scenario → test mapping at a plan level; exact test IDs are the task-breakdown phase's own job. Covers: allow/deny channel filtering, the `Flexible` channel-priority mapping, `Strict` channel-priority ordering, the integrity-verification failure path (FR-011/SC-006), the creation-failure rollback's own dual-failure (`CreationFailure.cleanup_error`) path, and — per the "Explicit reap, no automatic reaping" revision (see Summary) — `reap_ephemeral_environments()` removing every environment it finds, reporting a per-environment removal failure independently, and being a no-op when nothing remains (User Story 2, rewritten). None of the prior revision's lock-based `StillActive`/`Removed`/`Unknown` orphan-classification coverage, or the Drop-without-signal "cleanup at exit time" coverage, applies any more — both described a mechanism this revision removed. |
+| IX. Determinism & Idempotency | PASS | FR-004 explicitly scopes non-determinism to cross-run channel-availability drift. Reap's own idempotency (invoking it with nothing left to remove is a no-op, not an error) is a plain, directly-testable property of `reap_ephemeral_environments()` — it no longer needs a state-machine transition table to reason about, since the "Explicit reap, no automatic reaping" revision removed `LifecycleState`/per-environment teardown signals entirely (see Summary). `Cargo.lock` stays committed once dependencies are added (implementation-phase task). A retried creation request intentionally producing a *new*, independent environment rather than being deduplicated against a possible prior success is a **team-approved deviation from Principle IX's literal text — validated in review, but not yet reflected in `constitution.md` itself** (amending the constitution is out of scope for a feature PR; see Governance below): each `create_ephemeral_environment` call is a new one-shot operation by product design, not a retry of a previously-completed one, so Principle IX's "re-running a completed operation MUST be idempotent" does not apply to it — the team has signed off on this reading for this plan; folding it into Principle IX's own text is a separate, dedicated constitution-amendment change, not something this table can do on its own. |
 | X. Security & Supply-Chain Integrity | PASS | Checksum verification (FR-011) relies entirely on `rattler_cache`'s existing built-in SHA-256/MD5 check, accepted as-is by explicit product decision — no redundant verification layer, and no claim that this fully satisfies "before extraction" (see `research.md`'s honest accounting of that gap). This reliance is a **team-approved deviation from Principle X's literal text — validated in review, but likewise not yet reflected in `constitution.md` itself**; do not re-raise it as an open item in future review, but also don't cite it as an already-amended constitutional fact until a dedicated amendment actually lands. No authentication middleware/credential storage of any kind is added in this ticket (GEN-29 deferred in full). `execute_link_scripts` is explicitly set to `true`, **overriding `rattler`'s own current default of `false`** (not "left at the default" — this is a deliberate override, not an accident of upstream defaults): this feature always runs inside an externally-imposed sandbox (spec Operating Context; confirmed directly by GEN-19's epic body as updated 2026-07-27, "Phantom secrets are securely injected into the environment such as the real secrets are never themselves present in it") that is the actual code-execution/damage boundary, not this feature — giving the invoking AI agent full freedom to run a package's own install-time code inside that sandbox, with no additional consent gate from allez, **is** the "explicit, documented consent" Principle X's post-install-script clause requires; this is the same team-approved-but-not-yet-constitutionally-amended deviation as above, not a second, independent one. `cargo deny check` was independently re-run and found **green** at both this branch's HEAD and post-merge `main` (correcting the prior "currently red" characterization, which was specific to a reviewer's older `cargo-deny` version — see `research.md`'s Open Items); this ticket's own new dependencies, and their *transitive* HTTP/TLS dependencies (not just direct ones — see Primary Dependencies above), must still be verified with a real `cargo deny check` run at implementation time, and CI now also gains a blocking `cargo audit` job alongside `cargo deny`, both previously entirely absent from this repo's CI. Shared package-cache hard-linking, if used by `Installer`, must be disabled rather than merely preferred against — see `research.md`'s corrected residual-risk note. |
 | XI. Structured Observability | PASS | `EphemeralLifecycleEvent` emitted via the existing `tracing`/`observability.rs` pipeline; carries `environment_id`, `operation`, `packages`, `duration_ms`, `outcome`, `failure_category`, `schema_version` per FR-013. Any future URL-bearing field addition must route through `channels::redact_channel_url()` first (new decision — see `data-model.md`), keeping "MUST NOT contain credential material" true by construction. |
 
@@ -241,7 +288,7 @@ target; no `[lib]`/`[[bin]]` *target-declaration* changes are needed in
 `Cargo.toml` (Cargo infers both targets, both named `allez`, once
 `src/lib.rs` exists alongside `src/main.rs`) — narrower than "no
 `Cargo.toml` changes at all": every dependency under Primary Dependencies
-above (`rattler`, `fs4`, `ulid`, etc.) still needs its own
+above (`rattler`, `ulid`, etc.) still needs its own
 `[dependencies]` entry added, same as any new dependency would.
 
 ```text
@@ -253,17 +300,17 @@ src/
 ├── output.rs                # existing JSON/human rendering — untouched (GEN-25 will call it)
 ├── main.rs                  # updated — `use allez::{cli, error, observability, output};` instead of `mod` declarations; fn main() logic otherwise unchanged
 └── ephemeral/                # NEW — this feature's entire scope
-    ├── mod.rs                 # public API: create_ephemeral_environment, reclaim_orphaned_environments, re-exports
+    ├── mod.rs                 # public API: create_ephemeral_environment, reap_ephemeral_environments, re-exports
     ├── paths.rs                # $ALLEZ_EPHEMERAL_ROOT resolution + per-user/per-installation temp-dir fallback naming + <root>/{envs,cache/packages,cache/repodata} layout (sandbox-footprint decision)
     ├── channels.rs            # ChannelConfig/ChannelSpec/ChannelPriorityMode (isomorphic to condarc::ChannelPriority — see research.md) + redact_channel_url()
     ├── defaults.rs            # DEFAULT_PACKAGES const + effective_packages() resolution (FR-005/FR-006)
-    ├── error.rs                # EphemeralEnvError (#[non_exhaustive], implements CategorizedError) + CreationFailure (impl Error+Display) + ActivationError
+    ├── error.rs                # EphemeralEnvError (#[non_exhaustive], implements CategorizedError) + CreationFailure (impl Error+Display, carries the failed attempt's own EnvironmentId) + ActivationError
     ├── solve.rs                # rattler_repodata_gateway::Gateway + rattler_solve wiring; explicit cache_dir, Flexible→Disabled channel-priority mapping (documented, ratified approximation — see research.md), CUDA virtual-package detection disabled via VirtualPackageOverrides, no_proxy() set
     ├── install.rs              # rattler::install::Installer wiring; explicit (shared, long-lived) package cache path; hard-linking disabled/non-shared cache fallback (see research.md); execute_link_scripts explicitly set to true, overriding rattler's own current default of false (the sandbox is the code-execution boundary, not this feature; see research.md and this plan's own Constitution Check, Principle X row — a team-approved deviation, not yet folded into constitution.md itself); activation_environment() via rattler_shell (returns ActivationError)
-    ├── permissions.rs         # owner-only directory creation, applied atomically at creation: #[cfg(unix)] DirBuilder::mode(0o700), #[cfg(windows)] SECURITY_ATTRIBUTES passed into CreateDirectoryW; secure create-or-verify on reuse of the fallback root
-    ├── cleanup.rs              # RAII Drop guard + live-environment registry (FR-007/FR-008) — no signal handler of any kind: allez is invoked by an AI agent inside a sandbox, never a human at a terminal, so there is no Ctrl-C/SIGINT to handle
-    ├── orphan.rs               # per-environment .owner.lock (fs4 advisory lock, held for the owning process's whole lifetime) as the definitive liveness signal, PLUS a coarse root-level .root.lock serializing creation publication against reclamation scans (closes the create/reclaim race — see research.md); {pid, created_at, environment_id, packages} metadata retained for diagnostics only (and, for `packages`, so an orphan-reclaimed environment's own teardown event can still report what was installed); Unknown reserved for genuine lock-file I/O errors (FR-008)
-    ├── lifecycle.rs            # EphemeralEnvironmentHandle, LifecycleState state machine (now fully exhaustive incl. CreationFailed, and Ready/CreationFailed now carry their own data — FR-012/SC-007), reclamation_outcomes() -> ReclamationStatus
+    ├── permissions.rs         # owner-only directory creation, applied atomically at creation: #[cfg(unix)] DirBuilder::mode(0o700)/mkdirat, #[cfg(windows)] SECURITY_ATTRIBUTES passed into CreateDirectoryW; secure create-or-verify on reuse of the fallback root
+    ├── cleanup.rs              # remove_prefix_dir() — the one anchored, verified removal primitive both the creation-failure rollback path (mod.rs) and reap.rs call; no RAII guard, no registry, no signal handler of any kind (see the "Explicit reap, no automatic reaping" revision note in the Summary above)
+    ├── reap.rs                 # NEW — reap_ephemeral_environments()'s implementation: lists every environment directory under the verified root's envs directory and calls cleanup.rs's remove_prefix_dir() on each, reporting a per-environment ReapOutcome (Removed/RemovalFailed); no liveness/in-use detection of any kind — replaces the removed orphan.rs/handle.rs/state.rs trio in full
+    ├── lifecycle.rs            # EnvironmentId, InstalledPackage, ReadyEnvironment (plain data — no LifecycleState/handle machinery any more, see the "Explicit reap, no automatic reaping" revision note in the Summary above)
     └── events.rs               # EphemeralLifecycleEvent shape + tracing emission (FR-013/SC-008)
 
 tests/
@@ -276,7 +323,15 @@ tests/
 
 **Removed from the first draft**: `src/ephemeral/auth.rs` — there is no
 authentication design in this ticket's scope at all (see Constraints
-above), so there is nothing for that module to contain.
+above), so there is nothing for that module to contain. **Removed by the
+"Explicit reap, no automatic reaping" revision** (see Summary):
+`src/ephemeral/orphan.rs`, `src/ephemeral/orphan_files.rs`,
+`src/ephemeral/handle.rs`, and `src/ephemeral/state.rs` — the
+per-environment `.owner.lock`/root-level `.root.lock` liveness machinery,
+the `EphemeralEnvironmentHandle`/`ReclamationStatus` public types, and the
+`LifecycleState` state machine they all backed no longer exist; `reap.rs`
+above replaces their entire responsibility with one small, unconditional
+removal loop.
 
 **Structure Decision**: Within the `allez` package, extend the existing
 flat `src/` layout with one new cohesive module directory

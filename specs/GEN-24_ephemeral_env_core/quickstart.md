@@ -4,6 +4,17 @@ This is a validation/run guide, not an implementation walkthrough — see
 `contracts/ephemeral_env_api.md` for the API and `data-model.md` for types.
 Task-by-task implementation breakdown is a separate, later artifact.
 
+**Explicit reap, no automatic reaping**: this feature does not tear down a
+successfully created ephemeral environment on its own — not on a signal,
+not on process exit, not via any orphan-detection mechanism. A successfully
+created environment persists on disk, usable, until a caller explicitly
+calls [`reap_ephemeral_environments`], which removes every ephemeral
+environment it finds for the current local user account and `allez`
+installation, unconditionally, without checking whether any of them is
+still in use. See `spec.md`'s User Story 2 and `research.md`'s "Explicit
+reap, no automatic reaping" decision for the full rationale; this guide's
+validation steps reflect that behavior throughout.
+
 ## Prerequisites
 
 - Rust toolchain matching `Cargo.toml`'s `edition = "2024"`.
@@ -20,7 +31,7 @@ Task-by-task implementation breakdown is a separate, later artifact.
   the CI matrix (`windows-latest`) — there is no equivalent code path to
   exercise on macOS/Linux CI at all, `#[cfg(windows)]` excludes it
   entirely on those platforms by construction. The other three target
-  platforms' owner-only-permission behavior (Unix `DirBuilder::mode`) is
+  platforms' owner-only-permission behavior (Unix `mkdirat`/mode) is
   validated by their own `#[cfg(unix)]` unit tests, which run on both the
   macOS and Linux CI legs.
 - Each test process should set its own `ALLEZ_EPHEMERAL_ROOT` (e.g. a
@@ -28,31 +39,20 @@ Task-by-task implementation breakdown is a separate, later artifact.
   repodata cache under this root is deliberately long-lived and shared
   (see `research.md`), so tests that don't isolate their root from each
   other, or from a developer's own manual runs, could observe each
-  other's cached packages or orphan-scan state. **This alone is not
-  sufficient isolation for tests within the same integration-test binary
-  (corrected in this revision — an earlier draft implied "one root per
-  binary" was the whole story)**: `cargo test` runs every `#[test]`
-  function inside one compiled test binary (e.g. all of `tests/ephemeral_env.rs`'s
+  other's cached packages or (now that `reap_ephemeral_environments()`
+  removes *every* environment it finds under a root, unconditionally)
+  each other's environments. `cargo test` runs every `#[test]` function
+  inside one compiled test binary (e.g. all of `tests/ephemeral_env.rs`'s
   dozens of test functions) concurrently, on multiple threads, by
   default — but `ALLEZ_EPHEMERAL_ROOT` is a single process-wide
   environment variable, so setting it once per binary still leaves every
-  test function within that binary sharing the *same* root and its
-  automatic orphan-reclamation scan. A test that deliberately creates an
-  orphaned directory to assert against could have it consumed by a
-  *different*, concurrently-running test's own `create_ephemeral_environment()`
-  call before the first test's own assertion runs. Any test that touches
-  the shared root directly (orphan-reclamation tests, root-lock-timeout
-  tests, and any test relying on `ALLEZ_EPHEMERAL_ROOT` being exclusively
-  its own) MUST serialize against every other such test — e.g. via the
-  `serial_test` crate's `#[serial]` attribute, or an equivalent shared
-  `Mutex` — and additionally give itself its own fresh, uniquely-named
-  subdirectory even while serialized, so failures in one such test don't
-  leave state a later one could misinterpret.
-- The root lock's own acquisition wait is a configurable timeout
-  (`ALLEZ_ROOT_LOCK_TIMEOUT_MS`, default 2000ms — see `research.md`);
-  tests exercising this specifically (a deliberately-held root lock, or
-  an invalid override value) should set an explicit, short override
-  rather than relying on the 2-second default, to keep the suite fast.
+  test function within that binary sharing the *same* root. Any test
+  that calls `reap_ephemeral_environments()`, or that otherwise relies on
+  `ALLEZ_EPHEMERAL_ROOT` being exclusively its own, MUST serialize against
+  every other such test — e.g. via the `serial_test` crate's `#[serial]`
+  attribute, or an equivalent shared `Mutex` — since a reap call has no
+  way to distinguish "this test's own environments" from a concurrently
+  running sibling test's.
 - Each test process should also neutralize ambient conda-related
   environment variables it doesn't control (`CONDA_*`, `CONDARC`,
   `HTTP_PROXY`/`HTTPS_PROXY`) before exercising the real solve→install
@@ -116,7 +116,7 @@ This must include, at minimum, one test per acceptance scenario in
   deliberately mismatched checksum (a corrupted-artifact fixture entry,
   distinct from the normal resolvable packages) → creation fails with
   `EphemeralEnvError::IntegrityVerificationFailed`, no partial directory
-  left on disk (FR-011; SC-006 — previously untested).
+  left on disk (FR-011; SC-006).
 - Create against two fixture channels offering conflicting versions of
   the same package under `channel_priority: ChannelPriorityMode::Strict`
   → the higher-priority (index 0) channel's version installs, proving
@@ -137,17 +137,6 @@ This must include, at minimum, one test per acceptance scenario in
   other channel, and creation fails with `EphemeralEnvError::NoChannelsConfigured`,
   no directory left on disk — the one path that still reaches this category
   for an originally-empty channel list (FR-015; FR-002 allow/deny honoring).
-- Signal teardown after successful creation → directory fully removed
-  (User Story 2, Scenario 1; SC-002).
-- Signal teardown twice → second signal is a no-op, no error (User Story
-  2, Scenario 4).
-- Signal teardown before creation finishes → install completes
-  undisturbed, then cleanup runs automatically (User Story 2, Scenario 5).
-- Two concurrent environments; tear one down → the other is unaffected
-  (US2 Scenario 3; FR-009).
-- Every create/install/teardown step emits an `EphemeralLifecycleEvent`
-  (capture via a `tracing` test subscriber) carrying one consistent
-  `environment_id` per environment (FR-013/SC-008).
 - Create with a channel present in both `channels` and `denied_channels`
   (or absent from a non-empty `allowed_channels`) → that channel is
   filtered out before solving; if filtering empties the effective list,
@@ -156,101 +145,97 @@ This must include, at minimum, one test per acceptance scenario in
   ChannelPriorityMode::Flexible` → internally mapped to
   `rattler_solve::ChannelPriority::Disabled` and solves successfully
   (documented approximation — see `research.md`).
-- Create with a package that fails to resolve, where cleanup of the
-  partially-created directory also fails (e.g. `chmod` the prefix to
-  read-only on Unix, or hold an open handle without `FILE_SHARE_DELETE`
-  on Windows — a deterministic failure-injection technique, not a
-  "locked file," which doesn't reliably block removal on Unix) →
-  `await_ready()` does **not** resolve while cleanup is still running
-  (`CreationFailed { cleanup: Running, .. }` is explicitly non-terminal —
-  see `data-model.md`; assert `await_ready()`'s future has not completed
-  yet while cleanup is in flight), then resolves only once cleanup
-  reaches its own terminal state, returning `CreationFailure { error:
-  UnresolvablePackage, cleanup_error: Some(TeardownFailed) }` — both
-  failures surfaced, neither masking the other, and neither silently
-  dropped by resolving too early (FR-010).
-- Signal teardown while `LifecycleState` is `CreationFailed { cleanup:
-  Running }` → no-op/folds into the already-running cleanup; no second
-  removal attempt is started (FR-012, the branch the first draft's
-  `LifecycleState` didn't handle).
-- Dropping an `EphemeralEnvironmentHandle` without ever calling
-  `signal_teardown()` (simulating the owning process's normal,
-  no-explicit-signal exit from scope) → the environment directory is
-  still removed via `CleanupGuard`'s `Drop`, distinct from both the
-  explicit-signal path above and the crash-then-reclaim path below — this
-  is FR-008/SC-003's "cleanup completing at exit time" half, previously
-  exercised only implicitly (FR-008).
-- A leftover environment directory whose `.owner.lock` can be acquired
-  (no live process holds it) → reported as `OrphanReclamationOutcome::Removed`
-  and removed, purely from the successful lock acquisition — never from
-  the directory's age or a PID/metadata match (FR-008's "detected, not
-  silently undetected" guarantee, now backed by a definitive OS-level
-  check rather than a heuristic).
-- A leftover environment directory whose `.owner.lock` is still held by a
-  live process → classified `StillActive`, never touched, regardless of
-  how old the directory is.
-- A leftover environment directory whose lock file itself can't be
-  opened (simulate via a permission error) → classified `Unknown`, never
-  removed, but still present in the reported outcomes.
-- `ReadyEnvironment::activation_environment()` returns a `PATH` entry
-  that includes the environment's own `bin`/`Scripts` directory (GEN-25
-  forward-compatibility check); a forced activation failure returns
-  `ActivationError`, not an `EphemeralEnvError` variant.
+- Every create/install step emits an `EphemeralLifecycleEvent` (capture
+  via a `tracing` test subscriber) carrying one consistent
+  `environment_id`, a `packages` field matching the effective top-level
+  package set, and a well-formed `duration_ms` (FR-013/SC-008).
 - A channel URL containing embedded userinfo (`https://user:pass@host/...`)
   or a conda-token-style path (`https://host/t/<token>/...`) never appears
   verbatim in any `EphemeralEnvError` message or `EphemeralLifecycleEvent`
   field — assert the redacted form only (credential-redaction check,
   FR-013).
-- Two ephemeral environments created concurrently, one signaled to tear
-  down and failing (e.g. a read-only prefix on Unix / an open handle
-  without `FILE_SHARE_DELETE` on Windows, the same deterministic
-  failure-injection technique as above), the other torn down successfully
-  → each environment's own `await_torn_down()` result reflects only its
-  own outcome, never the sibling's (distinct from the dual-failure
-  `CreationFailure` case above, which is about a single environment's
-  creation-then-cleanup, not two independent environments).
-- `reclamation_outcomes()` returns `ReclamationStatus::Scanning` before
-  the automatic scan completes, then `ReclamationStatus::Complete(_)`
-  afterward, and keeps returning the same `Complete(_)` value on repeated
-  polls (FR-008's "distinct signal" is actually observable, not just
-  eventually consistent by accident).
-- A reclamation scan started while `envs/.root.lock` is held by a
-  concurrent creation's own publication sequence waits for that lock
-  rather than proceeding — no directory is ever reported `Removed`
-  while its creator is still mid-publication (the race the fourth review
-  cycle's root-lock fix specifically closes).
+- `ReadyEnvironment::activation_environment()` returns a `PATH` entry
+  that includes the environment's own `bin`/`Scripts` directory (GEN-25
+  forward-compatibility check); a forced activation failure returns
+  `ActivationError`, not an `EphemeralEnvError` variant.
+- Create with a package that fails to resolve, where rolling back the
+  partially-created directory also fails (e.g. `chmod` the prefix to
+  read-only on Unix, or hold an open handle without `FILE_SHARE_DELETE`
+  on Windows — a deterministic failure-injection technique, not a
+  "locked file," which doesn't reliably block removal on Unix) →
+  `create_ephemeral_environment` returns `CreationFailure { error:
+  UnresolvablePackage, cleanup_error: Some(TeardownFailed), .. }` — both
+  failures surfaced, neither masking the other (FR-010).
+- **(Explicit reap, no automatic reaping — see `spec.md`'s rewritten
+  User Story 2)** After a successful creation, drop every reference to
+  the returned `ReadyEnvironment` → the environment's directory is left
+  exactly as it was; nothing removes it (User Story 2, Scenario 1).
+- Create one or more ephemeral environments, then call
+  `reap_ephemeral_environments()` → every one of them is removed from
+  disk, each reported as `ReapOutcome::Removed { id }` (User Story 2,
+  Scenario 2; SC-003).
+- Create two environments, and force one's removal to fail during a reap
+  call (the same failure-injection technique above, applied to one of the
+  two environment directories) → that one is reported
+  `ReapOutcome::RemovalFailed { id, error }`, distinct from the other's
+  `ReapOutcome::Removed { id }`, which is unaffected (User Story 2,
+  Scenario 3; FR-009).
+- Call `reap_ephemeral_environments()` when no ephemeral environments
+  exist → returns `Ok(vec![])`, not an error (User Story 2, Scenario 4;
+  SC-007).
+- Call `reap_ephemeral_environments()` twice in a row after creating one
+  environment → the first call removes it and reports `Removed`; the
+  second call, immediately afterward, returns `Ok(vec![])` since nothing
+  remains (User Story 2, Scenario 5; SC-007).
+- Every `ReapOutcome` — success or failure — emits a `"teardown"`-operation
+  `EphemeralLifecycleEvent` carrying that environment's own
+  `environment_id` (FR-013/SC-008).
 
 ## Manual smoke test (optional, illustrative)
 
-Once implemented, a throwaway `examples/ephemeral_smoke.rs` (or a `cargo
-test -- --ignored` test) can exercise the real flow end-to-end against the
-local fixture channel:
+`examples/ephemeral_smoke.rs` exercises the real create → reap flow
+end-to-end against the local fixture channel:
 
 ```rust
+use allez::ephemeral::{
+    ChannelConfig, RequestedPackages, create_ephemeral_environment, reap_ephemeral_environments,
+};
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let channels = allez::ephemeral::ChannelConfig::from_urls(vec![
-        "file:///path/to/fixture-channel".to_string(),
-    ]);
-    let handle = allez::ephemeral::create_ephemeral_environment(
-        allez::ephemeral::RequestedPackages::UseDefaultOrOverride,
+    let channels = ChannelConfig::from_urls(vec!["file:///path/to/fixture-channel".to_string()]);
+    let ready = create_ephemeral_environment(
+        RequestedPackages::UseDefaultOrOverride,
         channels,
         None,
-    );
-    let ready = handle.await_ready().await?;
+    )
+    .await?;
     println!("environment ready at {}", ready.location.display());
     for pkg in &ready.installed_packages {
         println!("  {} {}", pkg.name, pkg.version);
     }
-    handle.signal_teardown();
-    handle.await_torn_down().await?;
+
+    // Nothing above tore the environment down automatically -- it stays on
+    // disk, usable, until reaped explicitly.
+    assert!(ready.location.exists());
+
+    let outcomes = reap_ephemeral_environments()?;
+    println!("reaped {} environment(s)", outcomes.len());
     assert!(!ready.location.exists());
     Ok(())
 }
 ```
 
+Run it with:
+
+```sh
+ALLEZ_EPHEMERAL_ROOT=/tmp/allez-smoke cargo run --example ephemeral_smoke
+```
+
 Expected outcome: prints the resolved prefix path and installed package
-list, then the directory is gone by the time the process exits.
+list, confirms the directory is still present immediately after creation
+(nothing tore it down on its own), then confirms it is gone only after the
+explicit `reap_ephemeral_environments()` call.
 
 ## Validating owner-only permissions manually (per-platform)
 
@@ -260,47 +245,29 @@ list, then the directory is gone by the time the process exits.
   creating user (and, implicitly, whatever administrator access Windows
   itself never lets you fully exclude — see `spec.md` Edge Cases).
 
-## Validating orphan reclamation manually
+## Validating explicit reap manually
 
-1. Start creating an ephemeral environment, then kill the process with
-   `SIGKILL`/`taskkill /F` before it finishes (bypassing the `Drop` guard
-   entirely, on purpose — there is no other exit-cleanup mechanism to
-   bypass, since this feature installs no signal handler of any kind;
-   see `research.md`'s Exit cleanup decision) — this also
-   forces the OS to release the `.owner.lock` file's advisory lock,
-   exactly as it would for any other file handle the killed process held.
-2. Confirm the leftover directory (and its `.owner.lock` file, and its
-   `{pid, created_at, environment_id, packages}` metadata file — all
-   diagnostic-only, not load-bearing) is still present on disk.
-3. Invoke `create_ephemeral_environment` again for the same user/`allez`
-   installation.
-4. Confirm the leftover directory from step 1 is gone (or, if its removal
-   itself fails, that a `RemovalFailed` outcome was reported), retrievable
-   via the new handle's `reclamation_outcomes()` once it returns
-   `ReclamationStatus::Complete(_)` (poll past any `Scanning` result first)
-   — and that this new creation's own success/failure was unaffected by
-   that reclamation attempt (FR-008's "MUST NOT block or fail the new
-   creation itself").
-5. To confirm the lock-based check is definitive, not age-based: create
-   an environment, keep the owning process alive and running (don't kill
-   it), and confirm a concurrent `create_ephemeral_environment` call's
-   own reclamation scan reports it as `StillActive` and does not touch
-   it — even if the test artificially backdates the directory's
-   modification time to make it look old. Age must have zero influence
-   on this outcome.
-6. To exercise the `Unknown` path: simulate a permission error opening a
-   candidate directory's `.owner.lock` file (e.g. via a restrictive
-   parent-directory permission in a test harness); confirm the outcome
-   is `Unknown`, not `Removed` or `StillActive`, and that the directory
-   is left untouched.
-7. To confirm the root-lock serialization actually closes the
-   creation/reclamation race (not just documents it): hold
-   `envs/.root.lock` externally (e.g. from a test harness thread) for a
-   short window, then trigger `create_ephemeral_environment` and a
-   concurrent `reclaim_orphaned_environments()` from two different
-   simulated callers at once; confirm neither proceeds past its own
-   `mkdir`/enumeration step until the externally-held lock is released,
-   and confirm the reclamation scan never observes a directory this
-   create call has started but not yet finished publishing (no
-   directory should ever be reported `Removed` while its own creator
-   is still inside that publication window).
+1. Create an ephemeral environment (e.g. via `examples/ephemeral_smoke.rs`,
+   commenting out or stopping short of its own `reap_ephemeral_environments()`
+   call), or let a process creating one exit — normally, or via
+   `SIGKILL`/`taskkill /F` mid-install. Confirm the environment's directory
+   is still present on disk in either case: nothing about how the owning
+   process exited removes it (User Story 2, Scenario 1).
+2. Confirm that starting a *new* `create_ephemeral_environment` call for
+   the same user/`allez` installation does not touch the leftover
+   directory from step 1 either — it is left exactly as it was; this
+   feature performs no automatic detection or removal of it at any point.
+3. Call `reap_ephemeral_environments()` and confirm the leftover directory
+   from step 1 (and any other ephemeral environment present under the
+   same root) is now gone, reported as `ReapOutcome::Removed`.
+4. Repeat step 3 immediately afterward and confirm it returns an empty
+   list — there is nothing left to remove, and this is not an error
+   (User Story 2, Scenario 5).
+5. To confirm reap performs no liveness check at all: create an
+   environment, keep the owning process alive and actively using it
+   (e.g. holding a file open inside it), and call
+   `reap_ephemeral_environments()` from a separate process or thread —
+   confirm it removes the environment anyway, since this feature does not
+   attempt to determine whether an environment is still in use before
+   removing it. Avoiding this outcome in practice is the reaping caller's
+   own responsibility, not a guarantee this feature provides.

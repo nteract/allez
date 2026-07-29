@@ -191,88 +191,50 @@ impl PackageSpec {
 }
 ```
 
-## `EphemeralEnvironmentHandle`
+## `create_ephemeral_environment` (plain async function — no handle type)
 
-Represents the spec's Ephemeral Environment key entity. Returned the
-moment creation is *requested* (FR-001), not only on successful completion,
-so it can carry a teardown signal even mid-creation.
-
-| Field | Type | Notes |
-|---|---|---|
-| `id` | `EnvironmentId` (newtype over `ulid::Ulid`) | Distinct per environment; the identifying value FR-013/SC-008 requires on every structured event for this environment's lifecycle. |
-| (internal) lifecycle state | `Arc<Mutex<LifecycleState>>` | Not a public field — shared so a `signal_teardown()` call and the in-flight creation task see the same state. Governs *teardown* progress only (see the correction below); it is not `await_ready()`'s source of truth. |
-| (internal) creation outcome | `Arc<CreationOutcomeCell>` — a small wrapper type this feature defines itself, **not** a bare `tokio::sync::OnceCell` | Populated exactly once, the instant creation resolves one way or the other; `await_ready()` reads it, never `LifecycleState` directly. See `CreationOutcomeCell` immediately below for the full definition and why a bare `OnceCell` doesn't work. |
-| (internal) cleanup guard | `Arc<CleanupGuard>` (`cleanup.rs`) | **New in this revision, closes a real gap a review found**: owns this environment's `OwnerLock` (from `orphan.rs`'s `publish_environment()`), its `VerifiedRoot` anchor, and its `EnvironmentId`, for as long as *either* this handle *or* the `ReadyEnvironment` it eventually produces (see `ReadyEnvironment`'s own `keep_alive` field below — the same `Arc`, cloned) is alive. Constructed by `create_ephemeral_environment()`'s own wiring immediately after `publish_environment()` returns, *before* any async solve/install work begins — never left as a bare local variable in that function's own call frame, which the compiler would be free to drop (releasing the `OwnerLock` early) the instant that frame ends, making a live, still-installing environment look orphaned to a concurrent reclamation scan. This is the type whose `Drop` best-effort-removes the prefix directory (see `CleanupGuard`'s own description below) — firing only once every clone of this `Arc` (both the handle's own and every `ReadyEnvironment` clone's) has gone out of scope, never while either one is still held — and, as of this revision, the type responsible for the `OwnerLock`'s own lifetime — the lock is only ever released as a side effect of this guard's own removal/drop path, never earlier. |
-| (internal) effective packages | `Vec<PackageSpec>` | **New in this revision, closes a real observability gap a review found**: the effective top-level package set (FR-005/FR-006's resolved list) is resolved once, before publication, and stored here for the handle's own lifetime — every `EphemeralLifecycleEvent` this environment's *live-process* paths emit (create, install, and the explicit-signal/`Drop`/creation-failure teardown paths) reads this field for its own `packages` value rather than re-deriving or duplicating it. (An orphan-reclaimed environment's teardown event, emitted by a different, later process that never resolved this value itself, instead reads the same list back from the on-disk metadata file `orphan.rs`'s `publish_environment()` wrote — see `research.md`.) |
-
-**`CreationOutcomeCell` — new in this revision, corrects a factual error
-from an earlier draft**: that draft asserted `tokio::sync::OnceCell` has
-a `wait()` method. It does not — confirmed against `tokio`'s own source
-and issue tracker; the maintainers explicitly declined to add one (see
-[tokio-rs/tokio#4788](https://github.com/tokio-rs/tokio/issues/4788)).
-The correct, standard pattern for "wait until some other task populates
-this value" — which a bare `OnceCell` cannot do on its own — pairs it
-with a `tokio::sync::Notify` (both gated behind tokio's `sync` feature,
-which must be added to `Cargo.toml` — see `research.md`):
+**Rewritten in full (see the "Explicit reap, no automatic reaping"
+decision) — supersedes every `EphemeralEnvironmentHandle`/`LifecycleState`/
+`CreationOutcomeCell`/`ReclamationStatus` design this section previously
+described.** Automatic teardown is removed entirely: there is no longer a
+reference returned before creation completes, no way to signal teardown
+for a single environment, no internal state machine, and no orphan
+detection. Representing the spec's Ephemeral Environment key entity no
+longer needs a handle type at all — creation is a plain, directly-awaited
+async function that resolves once, to one of two outcomes:
 
 ```rust
-/// Internal to this crate; not part of the public API. Populated exactly
-/// once, the instant creation resolves one way or the other — a
-/// successful `Ready`, or a `CreationFailed` whose `cleanup` has itself
-/// reached `Succeeded`/`Failed(_)` — regardless of which `LifecycleState`
-/// transition follows immediately afterward (see the correction below:
-/// this must NOT be described as "populated when LifecycleState reaches
-/// Ready", since the `CreatingTeardownQueued`+success case populates this
-/// cell and then transitions `LifecycleState` straight to `TearingDown`,
-/// skipping `Ready` entirely — see the new Creation-completion
-/// transitions table further down).
-struct CreationOutcomeCell {
-    cell: tokio::sync::OnceCell<Result<ReadyEnvironment, CreationFailure>>,
-    notify: tokio::sync::Notify,
-}
-
-impl CreationOutcomeCell {
-    /// Called exactly once, by whichever code path first determines the
-    /// creation outcome (see the population rule above).
-    fn set(&self, outcome: Result<ReadyEnvironment, CreationFailure>) {
-        let _ = self.cell.set(outcome);
-        self.notify.notify_waiters();
-    }
-
-    /// `await_ready()`'s sole read path. Race-safe: subscribes to
-    /// `notify` *before* the second `get()` check, so a `set()` that
-    /// races between the first check and the subscription is never
-    /// missed (the classic check-subscribe-check pattern `Notify`'s own
-    /// docs recommend for exactly this "wait for a one-shot value" case).
-    async fn wait(&self) -> Result<ReadyEnvironment, CreationFailure> {
-        loop {
-            if let Some(outcome) = self.cell.get() {
-                return outcome.clone();
-            }
-            let notified = self.notify.notified();
-            if let Some(outcome) = self.cell.get() {
-                return outcome.clone();
-            }
-            notified.await;
-        }
-    }
-}
+pub async fn create_ephemeral_environment(
+    requested: RequestedPackages,
+    channels: ChannelConfig,
+    default_override: Option<Vec<PackageSpec>>,
+) -> Result<ReadyEnvironment, CreationFailure>;
 ```
 
-`await_ready()` reads/awaits this cell via the `wait()` method above,
-never `LifecycleState` directly — see the correction in the
-`LifecycleState` section below for why that distinction matters.
-Cloning: `ReadyEnvironment`/`CreationFailure` both already derive `Clone`
-(see their own sections below), so `wait()` returns an owned, cloned
-value each call — the cell itself is never consumed, so repeated
-`await_ready()` calls on the same handle all resolve to the same
-(cloned) value with no additional synchronization needed.
+Calling this function performs the entire create → solve → install
+sequence and resolves directly to `Ok(ReadyEnvironment)` on success or
+`Err(CreationFailure)` on failure — there is nothing further for the
+caller to await, poll, or signal. `EnvironmentId::new()` is generated once
+at the start of the call and threaded through every step (including a
+failed one), so it is the identifying value every `EphemeralLifecycleEvent`
+this call emits carries (FR-013/SC-008), and the value a `CreationFailure`
+reports even though no `ReadyEnvironment` was ever produced (see
+`CreationFailure` below).
 
-Methods (see `contracts/ephemeral_env_api.md` for full signatures):
-- `signal_teardown(&self)` — never blocks the caller past enqueueing the signal.
-- `await_ready(&self) -> Result<ReadyEnvironment, CreationFailure>` — resolves once creation completes (success) or fails; see `CreationFailure` below for why this is not a bare `EphemeralEnvError`. Resolves from the decoupled creation-outcome cell above, so it always reports the *original* creation outcome even if a teardown signal has since moved the handle on to `TearingDown`/`TornDown`.
-- `await_torn_down(&self) -> Result<(), EphemeralEnvError>` — resolves once a signaled teardown completes.
-- `reclamation_outcomes(&self) -> ReclamationStatus` — see `Orphan reclamation reporting` below.
+If creation fails partway through (an unresolvable package, a failed
+integrity check, and so on), this function still rolls back whatever
+partial directory it created for that attempt before returning
+`Err(CreationFailure)` — synchronously, as part of the same call, not via
+a background task or a `Drop` guard — reporting a distinct
+`cleanup_error` if that rollback itself also fails (FR-004/FR-010). This
+rollback behavior is unaffected by the "Explicit reap, no automatic
+reaping" decision: it is unrelated to tearing down a *successfully
+created* environment, which this function never does under any
+circumstance. A successful `ReadyEnvironment` this function returns is
+never removed by this function, by anything it spawns, or by anything
+that runs when the caller's own reference to it is dropped — see
+`ReadyEnvironment` below and [`reap_ephemeral_environments`](#reapoutcome-and-reap_ephemeral_environments)
+for the only way one is ever removed.
 
 ## `ReadyEnvironment`
 
@@ -285,8 +247,6 @@ pub struct ReadyEnvironment {
     pub id: EnvironmentId,
     pub location: std::path::PathBuf,
     pub installed_packages: Vec<InstalledPackage>,
-    // (internal, not `pub` — see the note immediately below)
-    keep_alive: std::sync::Arc<CleanupGuard>,
 }
 
 #[derive(Debug, Clone)]
@@ -297,42 +257,28 @@ pub struct InstalledPackage {
 }
 ```
 
-All three **public** `ReadyEnvironment` fields and all three
-`InstalledPackage` fields are `pub` — `quickstart.md`'s example reads
-them directly (`ready.location`, `pkg.name`, `pkg.version`), which
-requires this explicitly, not just a prose description. `InstalledPackage`
-is a thin projection of `rattler_conda_types::PackageRecord`, not the
-full record, so `rattler` types never leak across the public API
-boundary.
+All three `ReadyEnvironment` fields and all three `InstalledPackage`
+fields are `pub` — `quickstart.md`'s example reads them directly
+(`ready.location`, `pkg.name`, `pkg.version`), which requires this
+explicitly, not just a prose description. `InstalledPackage` is a thin
+projection of `rattler_conda_types::PackageRecord`, not the full record,
+so `rattler` types never leak across the public API boundary.
 
-**`keep_alive` — new in this revision, closes a real use-after-drop
-hazard a review found**: an earlier draft had only
-`EphemeralEnvironmentHandle` hold the `Arc<CleanupGuard>` responsible for
-this environment's eventual removal. But the fully-typed, documented
-usage pattern this feature's own contract shows —
-`handle.await_ready().await?` called directly on a temporary, with no
-intermediate `let handle = ...;` binding kept around afterward — is
-exactly the shape in which Rust drops that temporary `handle` value
-(and, with it, the only `Arc<CleanupGuard>` reference that existed) the
-moment the enclosing statement finishes, *before* the caller's next
-statement ever gets to use the resulting `ReadyEnvironment` at all. That
-would trigger `CleanupGuard`'s `Drop`-based best-effort removal
-immediately, out from under a value the caller hasn't even used yet —
-a real bug, not a hypothetical misuse. `ReadyEnvironment` now holds its
-own clone of the same `Arc<CleanupGuard>`, so the guard's `Drop` impl
-(which only fires once the `Arc`'s last strong reference disappears)
-cannot run until *both* the handle (if still held) *and* every live
-`ReadyEnvironment` clone have gone out of scope — which is also the
-*correct* description of "cleanup completing at exit time" (FR-008)
-regardless of which of the two the caller happens to still be holding
-when their own scope ends. This does not weaken `signal_teardown()`'s
-own explicit path at all: that path never relies on `Drop` — it spawns
-removal directly and sets `CleanupGuard`'s "claimed" flag immediately
-(see `CleanupGuard`'s own description below), so an explicit signal
-still removes the environment right away even while a `ReadyEnvironment`
-clone is still alive elsewhere; the later `Drop` of that clone simply
-becomes the no-op "someone already claimed removal" case the guard's
-own design already handles.
+**No cleanup guard, no `keep_alive` field (Explicit reap, no automatic
+reaping decision — supersedes the use-after-drop fix an earlier revision
+of this section described in detail)**: an earlier revision had
+`ReadyEnvironment` hold a private `Arc<CleanupGuard>` clone specifically
+so dropping a temporary `EphemeralEnvironmentHandle` (in the
+`handle.await_ready().await?`-on-a-temporary usage pattern that contract
+once documented) couldn't trigger a premature `Drop`-based removal of the
+value the caller hadn't used yet. Both the hazard and the fix it
+motivated no longer apply: there is no handle type any more (see
+`create_ephemeral_environment` above), no `CleanupGuard`, and no
+`Drop`-triggered removal of a successfully created environment at all.
+Dropping every clone of a `ReadyEnvironment` — or never holding one in
+the first place — has no effect whatsoever on the environment's
+directory; it persists exactly as created until a caller explicitly
+invokes [`reap_ephemeral_environments`](#reapoutcome-and-reap_ephemeral_environments).
 
 **GEN-25 forward-compatibility**: `ReadyEnvironment` also exposes a
 method (not a stored field, to avoid computing it eagerly during
@@ -349,15 +295,13 @@ impl ReadyEnvironment {
     /// re-derive activation itself, duplicating this feature's own
     /// knowledge of the prefix layout.
     ///
-    /// Returns `ActivationError`, **not** `EphemeralEnvError` (corrected
-    /// in this revision — the first draft incorrectly reused
-    /// `EphemeralEnvError` here): computing the activation environment
-    /// for an already-successfully-`Ready` environment is not a
-    /// create/install/teardown operation, so an activation failure
-    /// doesn't fit any of FR-010's five closed categories, and forcing
-    /// it into one would be a category-string lie. `ActivationError` is
-    /// its own small, single-purpose error type, outside FR-010's scope
-    /// entirely.
+    /// Returns `ActivationError`, **not** `EphemeralEnvError`: computing
+    /// the activation environment for an already-successfully-`Ready`
+    /// environment is not a create/install/reap operation, so an
+    /// activation failure doesn't fit any of FR-010's closed categories,
+    /// and forcing it into one would be a category-string lie.
+    /// `ActivationError` is its own small, single-purpose error type,
+    /// outside FR-010's scope entirely.
     pub fn activation_environment(&self) -> Result<Vec<(String, String)>, ActivationError>;
 }
 
@@ -373,17 +317,21 @@ Adds `rattler_shell` to this feature's dependency list (see `research.md`).
 
 ## `CreationFailure`
 
-**New in this revision** — the first draft's `await_ready() ->
-Result<ReadyEnvironment, EphemeralEnvError>` could only carry one error,
-but FR-010 requires the caller to receive *both* the original creation
-failure *and* a distinct cleanup-failure indication when cleanup of a
-partially-installed environment itself also fails. A bare
-`EphemeralEnvError` cannot represent "two things went wrong"; this type
-can.
+Represents a failed creation attempt — `create_ephemeral_environment`'s
+`Err` variant. FR-010 requires the caller to receive *both* the original
+creation failure *and* a distinct cleanup-failure indication when
+rolling back a partially-installed environment itself also fails; a bare
+`EphemeralEnvError` cannot represent "two things went wrong," so this
+type carries both.
 
 ```rust
 #[derive(Debug, Clone)]
 pub struct CreationFailure {
+    /// The environment identifier this failed attempt would have used —
+    /// present so a caller/test can correlate this failure with the
+    /// `EphemeralLifecycleEvent`s this attempt still emitted (FR-013),
+    /// even though no `ReadyEnvironment` was ever produced.
+    pub id: EnvironmentId,
     /// Why creation itself failed (channel/package/verification/location).
     pub error: EphemeralEnvError,
     /// `None` if cleaning up the partially-installed environment
@@ -410,195 +358,88 @@ impl std::error::Error for CreationFailure {
 }
 ```
 
-`CreationFailure` implementing `Display`/`Error` (new in this revision —
-the first draft omitted this) is required for `quickstart.md`'s manual
-smoke test to compile as written: `handle.await_ready().await?` inside a
-function returning `Result<(), Box<dyn std::error::Error>>` needs the `?`
-operator's error type to implement `std::error::Error`. Note
-`CreationFailure` itself does **not** implement `CategorizedError`/
-`category()` — only its `error`/`cleanup_error` fields (each a plain
-`EphemeralEnvError`) do; a caller rendering a `CreationFailure` for
-display picks whichever of its one or two categories it needs (plan.md's
-Constitution Check row III previously worded this ambiguously as
-"`EphemeralEnvError`/`CreationFailure` with a fixed `category()`," which
-read as if `CreationFailure` itself had one — corrected there too).
+`CreationFailure` implementing `Display`/`Error` is required for
+`quickstart.md`'s manual smoke test to compile as written:
+`create_ephemeral_environment(...).await?` inside a function returning
+`Result<(), Box<dyn std::error::Error>>` needs the `?` operator's error
+type to implement `std::error::Error`. Note `CreationFailure` itself does
+**not** implement `CategorizedError`/`category()` — only its
+`error`/`cleanup_error` fields (each a plain `EphemeralEnvError`) do; a
+caller rendering a `CreationFailure` for display picks whichever of its
+one or two categories it needs.
 
-`await_ready(&self) -> Result<ReadyEnvironment, CreationFailure>` (updated
-from the first draft's bare `EphemeralEnvError`). `await_torn_down`'s
-signature is unchanged (`Result<(), EphemeralEnvError>`) — tearing down an
-already-`Ready` environment has no parallel "creation error" to pair with,
-so the dual-failure case doesn't apply there.
+**No `LifecycleState`, no `EphemeralEnvironmentHandle`, no per-environment
+teardown signal, and no orphan-reclamation reporting (Explicit reap, no
+automatic reaping decision — supersedes this section's own prior content
+in full)**: earlier revisions of this data model described a substantial
+internal state machine here (`LifecycleState`'s `Creating`/
+`CreatingTeardownQueued`/`Ready`/`TearingDown`/`TornDown`/
+`CreationFailed` variants, a `signal_teardown()` transition table, and
+`EphemeralEnvironmentHandle::reclamation_outcomes() -> ReclamationStatus`
+backed by an automatic `reclaim_orphaned_environments()` scan run at the
+start of every creation call) needed to reconcile a caller-initiated
+teardown signal, a background orphan-reclamation scan, and an in-progress
+creation all racing against one another. None of that exists any more.
+`create_ephemeral_environment` (see above) is a single, directly-awaited
+`async fn` with no intermediate state to expose: it resolves exactly
+once, to `Ok(ReadyEnvironment)` or `Err(CreationFailure)`, and that is
+the entire lifecycle this data model needs to represent for creation.
+Removing a *successfully created* environment is handled by a completely
+separate, unrelated function — see `ReapOutcome` below — that has no
+notion of "in progress," "queued," or "still active" at all.
 
-## `LifecycleState` (internal, not part of the public API surface)
+## `ReapOutcome` and `reap_ephemeral_environments`
 
-**Corrected from the first draft, and further corrected in this
-revision**: the original enum had no defined `signal_teardown()`
-transition while in a creation-failed state, and conflated "cleanup
-running" with "cleanup complete" in one `Failed` variant, and conflated
-"teardown succeeded" with "teardown failed" in one `TornDown` variant.
-The first fix pass addressed the *transition* gaps but missed that
-`Ready`/`CreationFailed` still didn't actually *carry* the data
-`await_ready()` needs to return — there was nowhere for the successful
-`ReadyEnvironment`, or the original `EphemeralEnvError` behind a creation
-failure, to actually live. This revision carries both:
-
-```rust
-enum LifecycleState {
-    Creating,
-    CreatingTeardownQueued,
-    Ready(ReadyEnvironment),
-    TearingDown,
-    TornDown(TeardownOutcome),
-    CreationFailed { error: EphemeralEnvError, cleanup: CleanupOutcome },
-}
-
-enum TeardownOutcome { Succeeded, Failed(EphemeralEnvError) }
-enum CleanupOutcome { Running, Succeeded, Failed(EphemeralEnvError) }
-```
-
-**`await_ready()` never reads `LifecycleState` directly — it reads the
-`CreationOutcomeCell` above.** The rest of this section describes the
-*conditions under which that cell gets populated*, expressed in terms of
-`LifecycleState`'s own transitions (since that's what the creation task
-and the cleanup task actually observe) — not a description of what
-`await_ready()` itself inspects. `CreationFailed { cleanup: Running, .. }`
-is explicitly **not yet a populate-the-cell condition (corrected in the
-third review cycle)** — the first fix pass's wording ("populate once
-it's no longer `Creating`/`CreatingTeardownQueued`") was still wrong: it
-would have populated the cell the instant creation failed, even while
-cleanup of the partial environment was still in flight, recording
-`cleanup_error: None` purely because cleanup hadn't finished yet — not
-because it had actually succeeded. That's a real violation of FR-010: a
-cleanup failure discovered *after* the cell was already populated would
-have nowhere to go, since a `OnceCell` can only be set once. The cell is
-populated only once `cleanup` reaches `Succeeded` or `Failed(_)`:
-
-- `Ready(env)` → cell populated with `Ok(env.clone())` (this remains
-  genuinely terminal — once installation succeeds, nothing further
-  changes this outcome).
-- `CreationFailed { error, cleanup: Succeeded }` → cell populated with
-  `Err(CreationFailure { error: error.clone(), cleanup_error: None })`.
-- `CreationFailed { error, cleanup: Failed(e) }` → cell populated with
-  `Err(CreationFailure { error: error.clone(), cleanup_error: Some(e.clone()) })`.
-- `CreationFailed { cleanup: Running, .. }` → **cell not populated yet**;
-  whichever task is running cleanup populates it once `cleanup`
-  transitions `Running` → `Succeeded`/`Failed(_)`.
-- `CreatingTeardownQueued`, on a **successful** creation outcome → cell
-  populated with `Ok(env.clone())` **at the same moment**, even though
-  `LifecycleState` itself does not pass through `Ready` on this path — it
-  transitions directly to `TearingDown` instead (see the
-  Creation-completion transitions table further down). Populating the
-  cell is tied to *creation resolving*, never to *`LifecycleState` literally
-  equalling `Ready`* — that distinction is exactly what the third
-  correction below exists to fix.
-
-(`Creating`/`TearingDown`/`TornDown(_)` are the other
-non-populate-conditions/already-resolved-once states; documented here for
-completeness, not as new caller-visible behavior.)
-
-**Third correction (renumbered from "Fourth" for narrative clarity —
-same substance)**: an earlier draft only handled the plain
-`Ready(_) → TearingDown` case above and missed that `Ready(_)`'s own
-`signal_teardown()` transition (see the transition table below) moves
-`LifecycleState` on to `TearingDown` — which carries no `ReadyEnvironment`
-payload — the instant `signal_teardown()` is called on an already-`Ready`
-handle. A caller that calls `await_ready()` *after* that transition has
-already happened (a legitimate ordering — nothing prevents a caller from
-signaling teardown before ever awaiting readiness) would, if
-`await_ready()` read `LifecycleState` directly, find no terminal-state
-case left to resolve against. The fix: the moment the creation task
-itself determines the outcome
-(`Ready(env)`, or `CreationFailed` with `cleanup` at `Succeeded`/`Failed(_)`),
-it writes that outcome into `EphemeralEnvironmentHandle`'s separate
-`creation outcome` cell (see that struct's own field table above) as part
-of the *same* critical section that updates `LifecycleState` — so no
-`signal_teardown()` call can observe `Ready(_)` and start a
-`Ready → TearingDown` transition before the outcome cell is already
-populated. `await_ready()` reads/awaits only that cell from then on,
-never `LifecycleState`. This makes the outcome permanently available
-regardless of how many teardown signals arrive afterward, and regardless
-of how many states `LifecycleState` itself moves through subsequently.
-
-`signal_teardown()`'s complete transition table (every state handled):
-
-| Current state | On `signal_teardown()` | SC-007 branch |
-|---|---|---|
-| `Creating` | → `CreatingTeardownQueued` | starts the (queued) attempt |
-| `CreatingTeardownQueued` | unchanged | folds in (already queued) |
-| `Ready(_)` | → `TearingDown` (the `ReadyEnvironment`'s `location` is captured for the removal step before the state transitions away from it) | starts the attempt |
-| `TearingDown` | unchanged | folds in (already in progress) |
-| `TornDown(_)` | unchanged | no-op (already completed) |
-| `CreationFailed { cleanup: Running, .. }` | unchanged | folds in — cleanup from the creation failure *is* this environment's sole removal attempt, already in progress via another path |
-| `CreationFailed { cleanup: Succeeded \| Failed(_), .. }` | unchanged | no-op — already completed via another path |
-
-`await_torn_down()` resolves once `TornDown(_)` is reached (mapping
-`Succeeded → Ok(())`, `Failed(e) → Err(e)`), or immediately if the
-handle is already in `CreationFailed { cleanup: Succeeded, .. }` (→
-`Ok(())`) or `CreationFailed { cleanup: Failed(e), .. }` (→ `Err(e.clone())`)
-— that cleanup attempt *was* this environment's teardown in either case;
-no second attempt is ever started, matching FR-012.
-
-**Creation-completion transitions (new in this revision — closes a real gap
-the table above doesn't cover: it only describes `signal_teardown()`'s own
-transitions, not what the creation task itself does when it finishes)**:
-
-| Current state when creation finishes | On success | On failure |
-|---|---|---|
-| `Creating` | → `Ready(env)` (populate the creation-outcome cell with `Ok(env)` first, in the same critical section) | → `CreationFailed { error, cleanup: Running }`, cleanup starts immediately (unconditional — a creation failure always cleans up regardless of any teardown signal) |
-| `CreatingTeardownQueued` | Populate the creation-outcome cell with `Ok(env)` (so `await_ready()` still reports the real, successful outcome), then transition **directly to `TearingDown`** — skipping the `Ready` resting state entirely — and start the already-queued removal immediately, per FR-012's "cleanup runs automatically without requiring the caller to re-signal" | Identical to the `Creating` failure row above — a queued teardown signal changes nothing about the failure path, since cleanup already runs unconditionally on any creation failure |
-
-This is the mechanism that actually implements FR-012's Acceptance Scenario 5 ("the teardown request is queued and the environment is cleaned up automatically as soon as creation completes ... the in-progress install is not interrupted") — the `signal_teardown()` table above only records *that* a teardown was requested (`Creating → CreatingTeardownQueued`); this table is what actually *acts* on that record once creation itself finishes.
-
-## Orphan reclamation reporting
-
-`reclaim_orphaned_environments()` (free function — see
-`contracts/ephemeral_env_api.md` for its `Result`-wrapped signature,
-changed in this revision to represent a scan that couldn't even start,
-distinct from a scan that started and found nothing) runs automatically as the first step
-of `create_ephemeral_environment`. **Corrected from the first draft**: its
-results were previously discarded by that automatic call, with no way for
-the caller to learn what it found — violating FR-008's "a failed
-reclamation attempt MUST be reported as a distinct signal... separate
-from that new creation's own outcome." `EphemeralEnvironmentHandle` now
-exposes:
+**New (Explicit reap, no automatic reaping decision)** — the entire
+removal side of this feature's public API, replacing every
+`EphemeralEnvironmentHandle`/`LifecycleState`/orphan-reclamation type
+this section previously described.
 
 ```rust
-impl EphemeralEnvironmentHandle {
-    /// Non-blocking. The automatic reclamation scan this handle's own
-    /// creation request triggered (FR-008) — never blocks or fails this
-    /// handle's own creation outcome (`await_ready`), which succeeds or
-    /// fails entirely independently.
-    ///
-    /// Returns `ReclamationStatus::Scanning` while the scan is still
-    /// running (corrected in this revision — the first draft's plain
-    /// `Vec<OrphanReclamationOutcome>` return type couldn't distinguish
-    /// "still scanning" from "scanned, found nothing," so a caller
-    /// polling too early could wrongly conclude reclamation found no
-    /// orphans when it simply hadn't finished yet). Once the scan
-    /// completes, returns `ReclamationStatus::Complete(outcomes)` — from
-    /// then on, repeated calls keep returning the same `Complete(_)`
-    /// value. Returns `ReclamationStatus::Failed(error)` — **new in this
-    /// revision, closes a real gap a security review found**: if the
-    /// scan itself cannot even *start* (e.g. `envs/.root.lock` or the
-    /// root directory itself fails the same secure-open/verify sequence
-    /// `paths.rs` requires — a symlinked or wrong-owner root, or a
-    /// genuine I/O error), that is categorically different from "scanned
-    /// zero leftover directories": the former is this feature's own
-    /// `UnwritableLocation`, the latter is `Complete(vec![])`. Silently
-    /// returning `Complete(vec![])` for a root-level failure would let a
-    /// caller wrongly conclude "no orphans exist" when in fact reclamation
-    /// never actually ran at all — exactly the kind of undetected-orphan
-    /// risk FR-008 exists to prevent. `Failed(_)` is terminal, same as
-    /// `Complete(_)`: once reached, repeated calls return the same value.
-    pub fn reclamation_outcomes(&self) -> ReclamationStatus;
-}
+pub fn reap_ephemeral_environments() -> Result<Vec<ReapOutcome>, EphemeralEnvError>;
 
-pub enum ReclamationStatus {
-    Scanning,
-    Complete(Vec<OrphanReclamationOutcome>),
-    Failed(EphemeralEnvError),
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReapOutcome {
+    /// The environment's directory was removed.
+    Removed { id: EnvironmentId },
+    /// The environment's directory could not be removed.
+    RemovalFailed { id: EnvironmentId, error: EphemeralEnvError },
 }
 ```
+
+`reap_ephemeral_environments()` is synchronous (no `async`/`await` — it
+performs its own blocking filesystem work directly, unlike
+`create_ephemeral_environment`, which spawns its filesystem work onto
+Tokio's blocking pool internally): it resolves the same
+`$ALLEZ_EPHEMERAL_ROOT` (or fallback) root `create_ephemeral_environment`
+uses, lists every entry under that root's `envs/` directory whose name
+parses as an `EnvironmentId`, and calls the same anchored
+`remove_prefix_dir()` primitive (`cleanup.rs`) the creation-failure
+rollback path uses on each one in turn, collecting one `ReapOutcome` per
+entry. There is no liveness check, no `.owner.lock`/`.root.lock` of any
+kind, and no distinction between an environment that finished installing
+long ago and one a concurrent `create_ephemeral_environment` call might
+still be writing to — every entry found is removed unconditionally. A
+removal failure for one entry (reported as `RemovalFailed`) does not stop
+the loop or affect any other entry's own outcome (FR-009). An empty
+`envs/` directory — whether because nothing was ever created, or because
+a prior `reap_ephemeral_environments()` call already removed everything
+— yields `Ok(vec![])`, not an error (FR-008's idempotency guarantee).
+`Err(EphemeralEnvError::UnwritableLocation)` is returned only if the root
+itself cannot be securely opened/verified — a scan that cannot even
+start, distinct from `Ok(vec![])` ("scanned, found nothing").
+
+Every `ReapOutcome` — success or failure — emits an
+`EphemeralLifecycleEvent` with `operation: "teardown"` (see
+`EphemeralLifecycleEvent` below; the operation name is unchanged from
+when this feature had a signal-based teardown path, since it still
+accurately describes "removing an environment," now performed only by
+this function). Unlike a create/install event, a reap event has no way to
+know what packages a given environment was originally installed with —
+there is no metadata file recording that any more (that bookkeeping was
+part of the orphan-reclamation machinery this decision removes) — so its
+`packages` field is always an empty list; this is a deliberate
+simplification, not an oversight.
 
 ## `EphemeralEnvError`
 
@@ -691,18 +532,18 @@ Constitution XI.
 ## Relationships
 
 ```text
-EphemeralEnvironmentHandle 1---1 LifecycleState (internal, shared/interior-mutable)
-EphemeralEnvironmentHandle 1---1 EnvironmentId
-EphemeralEnvironmentHandle 1---1 ReclamationStatus (from its own creation's automatic scan)
-EphemeralEnvironmentHandle 1---0..1 Result<ReadyEnvironment, CreationFailure> (the decoupled creation-outcome cell `await_ready()` reads — populated once, independent of later LifecycleState transitions)
-ReadyEnvironment            *---1 EnvironmentId (same value as its handle)
+create_ephemeral_environment -> Result<ReadyEnvironment, CreationFailure> (resolves once; no intermediate handle type)
+ReadyEnvironment            *---1 EnvironmentId
 ReadyEnvironment            1---0..1 ActivationError (on-demand, not stored — see activation_environment())
+CreationFailure             1---1 EnvironmentId (the failed attempt's own identifier)
 CreationFailure             1---1 EphemeralEnvError (the original failure)
 CreationFailure             0..1---1 EphemeralEnvError (the distinct cleanup failure, if any)
 ChannelConfig               1---* ChannelSpec (ordered)
 RequestedPackages::Explicit *---* PackageSpec
 EphemeralLifecycleEvent     *---1 EnvironmentId (correlates events to one environment)
 EphemeralEnvError           1---1 category (via `category()`, 1:1, no drift)
+ReapOutcome                 1---1 EnvironmentId (the removed, or failed-to-remove, environment)
+reap_ephemeral_environments -> Vec<ReapOutcome> (one call, every environment currently on disk, processed independently)
 ```
 
 No persistent storage: every type above is in-memory/on-disk-as-a-side-effect
@@ -711,4 +552,10 @@ config file by this feature (matches spec Assumptions: "not cached, reused,
 or referenced by name across separate operations" — this does **not**
 extend to the shared package/repodata cache, which is deliberately
 long-lived; see `research.md` § Ephemeral location + package-download cache).
+There is no on-disk metadata file of any kind associated with an
+environment any more (no `{pid, created_at, environment_id, packages}`
+file, no `.owner.lock`, no `.root.lock`) — that bookkeeping belonged
+entirely to the orphan-reclamation machinery the "Explicit reap, no
+automatic reaping" decision removed; an environment's directory and its
+installed packages are the only on-disk state this feature tracks.
 </content>

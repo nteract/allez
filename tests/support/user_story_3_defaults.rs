@@ -30,7 +30,6 @@ async fn no_packages_with_an_override_installs_the_override_instead_of_defaults(
         root_fixture_config(ChannelPriorityMode::Strict),
         Some(override_packages),
     )
-    .await_ready()
     .await
     .unwrap();
 
@@ -57,7 +56,6 @@ async fn explicit_packages_alongside_an_override_ignore_the_override_entirely() 
         root_fixture_config(ChannelPriorityMode::Strict),
         Some(override_packages),
     )
-    .await_ready()
     .await
     .unwrap();
 
@@ -80,7 +78,6 @@ async fn an_override_resolving_to_empty_falls_back_to_default_packages() {
         root_fixture_config(ChannelPriorityMode::Strict),
         Some(Vec::new()),
     )
-    .await_ready()
     .await
     .unwrap();
 

@@ -46,6 +46,26 @@ orphan-detection decision below now adds a second, coarse-grained
 root-level lock that serializes every creation's publication sequence
 against every reclamation scan, closing this window.
 
+**Fifth revision note (Explicit reap, no automatic reaping — supersedes
+the entire "Decision: Exit cleanup + orphan detection" section below, and
+every revision note above that describes it)**: a later, separate product
+decision removed automatic teardown of every kind. There is no longer a
+per-environment teardown signal, no `Drop`-based cleanup for a
+successfully created environment, no `.owner.lock`/`.root.lock` liveness
+machinery, and no `reclaim_orphaned_environments()` orphan-detection
+scan — the entire mechanism the four revision notes above spent four
+review cycles hardening is gone, not merely revised further. `fs4` is no
+longer a dependency. In its place, this ticket adds one new, much
+simpler decision: a standalone `reap_ephemeral_environments()` function
+that removes every ephemeral environment it finds under the managed
+root, unconditionally, with no liveness check of any kind — see
+"Decision: Explicit reap, no automatic reaping" below, which replaces
+"Decision: Exit cleanup + orphan detection" in full. This is a
+deliberate, temporary simplification, not a permanent design point; the
+four revision notes above are left in place as a historical record of
+the automatic-teardown design this ticket originally shipped with, not
+as a description of current behavior.
+
 ## Decision: Package resolution + install engine
 
 **Decision**: Use the `rattler` ecosystem (native Rust libraries from
@@ -82,9 +102,8 @@ at all — a mismatch here is a hard compile-time type error, not a
 subtle runtime bug, so it fails loudly and immediately if guessed wrong,
 but it should not be guessed at when it can simply be checked.
 
-`rustix` is likewise promoted to an **explicit direct dependency** — it
-was already present transitively via `fs4`'s own implementation, but
-`permissions.rs` now calls `rustix::fs::mkdirat` directly for
+`rustix` is likewise promoted to an **explicit direct dependency** —
+`permissions.rs` calls `rustix::fs::mkdirat` directly for
 handle-anchored per-environment directory creation on Unix (see the
 Anchoring-extends-to-per-environment-creation note above), which is the
 same "a crate whose types/functions you name directly must be a direct
@@ -121,16 +140,19 @@ for `ReadyEnvironment::activation_environment()` (GEN-25's own PATH/env-var
 requirement — see `data-model.md`). `ulid` is new in this revision — the
 first draft specified `EnvironmentId` as "a newtype over `ulid::Ulid`" but
 never actually added the crate to this dependency list. **`ctrlc` is
-explicitly not a dependency** (corrected in this revision — an earlier
-draft added it): `allez` is invoked by an AI agent inside an
+explicitly not a dependency**: `allez` is invoked by an AI agent inside an
 externally-established sandbox, never directly by a human at a terminal,
 so there is no human-initiated interrupt (a terminal Ctrl-C) for this
-feature to ever need to handle. The only exit-cleanup mechanisms this
-feature needs are the RAII `Drop` guard (normal process exit) and
-orphan-reclamation-on-next-create (anything a `Drop` can't catch — a
-crash, `SIGKILL`, power loss) — see the Exit cleanup decision
-below, retitled accordingly (it no longer covers an "interrupt," since
-there is none to cover).
+feature to ever need to handle. **`fs4` is likewise not a dependency**
+(removed by the "Explicit reap, no automatic reaping" decision below,
+which supersedes the per-environment/root-level advisory-locking design
+an earlier revision of this file added it for) — a failed creation
+attempt's own partial directory is still rolled back synchronously, as
+part of the same call that discovered the failure, and a successfully
+created environment is removed only by the explicit
+`reap_ephemeral_environments()` call a caller makes on its own; neither
+needs a signal handler or an advisory file lock. See "Decision: Explicit
+reap, no automatic reaping" below.
 
 **Rationale**:
 - `rattler` is a library crate first; its CLI is feature-gated behind
@@ -343,229 +365,105 @@ and a real-world ACL implementation (`openai/codex`'s `windows-sandbox-rs`);
 atomicity correction and `LocalFree`/buffer-lifetime notes added during plan
 review (security lane, finding on unspecified SID/ACL ownership).*
 
-## Decision: Exit cleanup + orphan detection (FR-007, FR-008)
+## Decision: Explicit reap, no automatic reaping (FR-007, FR-008)
 
-**Decision**:
-- Immediate best-effort cleanup: an RAII `Drop` guard (`CleanupGuard`) that
-  removes the prefix directory when a live `EphemeralEnvironmentHandle`'s
-  cleanup path runs to completion — on normal process exit (the guard
-  drops as part of ordinary Rust scope-unwinding) or an explicit early
-  drop. **No signal handler of any kind is installed, and there is no
-  `ctrlc` dependency** — this reverses an earlier draft's design, which is
-  itself now a ratified correction, not an open design choice: `allez` is
-  invoked by an AI agent inside an externally-established sandbox, never
-  directly by a human at a terminal, so there is no Ctrl-C/SIGINT for this
-  feature to ever need to catch. The only two exit-cleanup mechanisms this
-  feature needs are this `Drop` guard (covers normal exit) and the
-  orphan-detection mechanism below (covers anything a `Drop` can't catch —
-  a crash, `SIGKILL`, power loss).
-- **Liveness determination via an OS-level advisory lock, not PID
-  matching (redesigned in the third revision)**: each environment
-  directory contains a dedicated lock file (`<env-dir>/.owner.lock`),
-  opened and locked exclusively, non-blocking, by the owning process as
-  part of its creation sequence — before any async solve/install work
-  begins, and before this handle is returned to the caller. The lock
-  is held for the owning process's *entire lifetime* and is **never
-  explicitly released except at successful teardown** (which removes the
-  whole directory, lock file included). This uses the `fs4` crate
-  (`fs4 = { version = "1", features = ["sync"] }` — MIT-licensed, pure
-  Rust via `rustix`, no `libc`/`unsafe` needed in this feature's own
-  code): `FileExt::try_lock()` for the non-blocking exclusive attempt,
-  implemented via `flock(2)` on Unix and `LockFileEx` on Windows.
-  Crucially, `fs4`'s (and the underlying OS's) own guarantee is that
-  **the lock is released automatically when the owning file handle is
-  closed — including when the owning process is killed via `SIGKILL`,
-  crashes, or the machine loses power** — which is exactly the gap
-  `Drop`-based cleanup cannot cover, and gives orphan detection a
-  *definitive* answer instead of the PID-plus-start-time heuristic's
-  approximation.
-- **A second, coarse-grained root-level lock serializes creation against
-  reclamation (new in the fourth review cycle; the publication sequence
-  it guards is unified into one function in a later review — see the
-  correction immediately below)** — corrects an overclaim
-  in the paragraph above: directory creation, `.owner.lock` file
-  creation, and actually locking it are three separate OS operations,
-  not literally one atomic step. Without further coordination, a
-  reclamation scan running concurrently (triggered by a *different*
-  `allez` process's own `create()` call) could observe an environment
-  mid-publication — its directory exists, but its lock file either
-  doesn't exist yet or exists but hasn't been locked yet — and either
-  misjudge it, or (worse) successfully lock and remove a directory whose
-  legitimate creator is still alive and about to lock it itself. To
-  close this: both the creation publication sequence (mkdir →
-  create `.owner.lock` → lock it) and a reclamation scan's entire
-  enumeration-and-classification pass MUST hold one shared, coarse
-  lock first — `$ALLEZ_EPHEMERAL_ROOT/envs/.root.lock` (or the
-  equivalent fallback-root path), acquired via the same `fs4` mechanism,
-  held only for the brief duration of that sequence/scan (not for the
-  environment's whole lifetime, unlike the per-environment lock). While
-  a reclamation scan holds this root lock, no concurrent `create()` call
-  can be mid-publication (it would be blocked waiting on the same lock),
-  so every directory the scan observes is guaranteed to be either fully
-  published (lock file exists and is genuinely lockable-if-orphaned) or
-  not yet created at all — never caught in between. This is a short,
-  low-contention critical section (a `mkdir`+two small file operations,
-  or an `O(n)` directory scan), not a source of meaningful serialization
-  overhead for a one-shot, low-concurrency library. This brief
-  synchronization wait is not the kind of "blocking the new creation" FR-008
-  forbids — FR-008's prohibition is specifically that reclamation's own
-  *success/failure outcome* must never determine the triggering
-  creation's own success/failure outcome (already satisfied: `await_ready()`
-  never awaits `reclamation_outcomes()`), not that the two operations may
-  never briefly coordinate for correctness. The root lock's own brief
-  acquisition wait uses a bounded-retry/timeout wrapper — see the
-  "Root-lock wait is a named, configurable timeout" correction below for
-  the exact value and why an unbounded wait isn't acceptable here.
+**Supersedes "Decision: Exit cleanup + orphan detection" in full** — see
+the Fifth revision note at the top of this file. A later, separate
+product decision removed automatic teardown of every kind: there is no
+longer a per-environment teardown signal, no `Drop`-triggered cleanup for
+a successfully created environment, no per-environment `.owner.lock`
+liveness marker, no root-level `.root.lock` publication/reclamation
+serialization, and no `reclaim_orphaned_environments()` orphan-detection
+scan. None of the machinery the superseded section below this one
+describes — the four review cycles that hardened it, the `fs4`-based
+advisory-lock liveness check, the diagnostics-only metadata file, the
+`Unknown`/`StillActive`/`Removed` classification — exists any more.
 
-**One function owns the entire root-lock-held publication sequence (a
-review finding, closed — an earlier draft's wording described this
-sequence in prose without ever naming a single function responsible for
-performing it end to end, which left room for an implementation to split
-"create the directory" and "acquire the root lock and publish the owner
-lock" across two independently-callable functions/call sites, each
-separately touching the root lock/directory — reintroducing exactly the
-mid-publication race this section exists to close)**: `orphan.rs`'s
-`publish_environment(root: &VerifiedRoot, id: EnvironmentId, packages:
-&[PackageSpec]) -> Result<PublishedEnvironment, EphemeralEnvError>` is
-the **one** entry point for this entire sequence —
-it acquires the root lock, creates the new environment's directory
-(delegating to `permissions.rs`'s anchored creation primitive, still
-under the same root-lock hold), creates and locks that directory's own
-`.owner.lock`, writes the diagnostics-only metadata file (including the
-caller-supplied `packages` — see the metadata-file field list below for
-why this parameter exists), releases the
-root lock, and returns `PublishedEnvironment { owner_lock: OwnerLock }` —
-never three separate calls a caller could interleave with something else
-mid-sequence. `create_ephemeral_environment`'s own wiring calls this one
-function and nothing else for publication; it does not call
-`permissions.rs`'s directory-creation primitive directly itself anymore
-(closing a real gap a later review found: an earlier draft had the
-creation wiring call directory-creation and lock-publication as two
-separate steps of its own, which could not actually guarantee the
-root-lock-held atomicity this section requires, since nothing forced
-both calls to happen under one held lock rather than two separately
-each acquiring and releasing it).
+**Decision**: A successfully created ephemeral environment is left
+exactly as created, indefinitely, until a caller explicitly calls a new,
+standalone function:
 
-**`OwnerLock`'s lifetime must be owned by something that outlives the
-publishing function's own call frame (a review finding, closed)**: the
-`OwnerLock` `publish_environment()` returns is this environment's sole
-liveness signal for as long as it stays open — dropping it prematurely
-(e.g. by only ever holding it in a local variable inside the async
-creation task's own function scope, which the compiler is free to drop
-as soon as that scope ends) would release the lock while the environment
-is still very much alive and mid-install, making a concurrent reclamation
-scan misclassify it as orphaned and remove it out from under its own
-still-running creation. `cleanup.rs`'s `CleanupGuard` is the type
-that actually owns it: `create_ephemeral_environment`'s wiring
-constructs the `CleanupGuard` immediately after `publish_environment()`
-returns — passing it the returned `OwnerLock`, the `VerifiedRoot`, and
-this environment's `EnvironmentId` — and stores that guard (`Arc`'d,
-alongside the rest of `EphemeralEnvironmentHandle`'s internal state) for
-the handle's entire lifetime, *before* any async solve/install work
-begins. The `OwnerLock` is therefore only ever released when
-`CleanupGuard` itself is dropped or explicitly claims removal — i.e.
-exactly when this environment's own lifecycle actually ends — never as an
-incidental side effect of a temporary variable going out of scope.
+```rust
+pub fn reap_ephemeral_environments() -> Result<Vec<ReapOutcome>, EphemeralEnvError>;
 
-**Root-lock wait is a named, configurable timeout, not an unpinned
-implementation detail (a review finding, closed — Constitution VII
-requires operations with an inherent wait to expose a configurable
-timeout with a sane default, which the prior wording didn't actually
-commit to)**: the root lock's own brief acquisition wait uses a bounded
-retry loop with a default timeout of **2 seconds** (chosen as generously
-above this section's own "milliseconds, bounded by the scan's own short
-duration" expected case that a legitimate, non-adversarial delay —
-e.g. a slow filesystem — should never plausibly exceed it, while still
-failing fast on a genuinely stuck holder rather than hanging
-indefinitely), overridable via the same `$ALLEZ_EPHEMERAL_ROOT`-adjacent
-configuration surface this feature already reads environment
-configuration from (an `ALLEZ_ROOT_LOCK_TIMEOUT_MS` environment variable,
-parsed once at first use; an invalid/unparseable value falls back to the
-2-second default rather than erroring). Exhausting this timeout without
-acquiring the root lock is a genuine failure to publish or scan safely —
-surfaced as `EphemeralEnvError::UnwritableLocation` from
-`publish_environment()`, or as `ReclamationStatus::Failed(UnwritableLocation)`/
-`Err(UnwritableLocation)` from the scan side — the same category already
-used for "the root itself fails its secure-open/verify check," since a
-root lock that can't be acquired within a generous bound is just as
-much a reason this feature cannot safely proceed at that location.
-- Orphan detection (bridges the gap `Drop` can't cover: `SIGKILL`, power
-  loss, `abort()`): on the next `create()` call, after acquiring the root
-  lock above, scan `$ALLEZ_EPHEMERAL_ROOT/envs/` (or its temp-dir
-  fallback — see below) for leftover directories and attempt a
-  non-blocking exclusive `try_lock()` on each one's `.owner.lock` file:
-  - **Lock acquired successfully** → definitively orphaned — no live
-    process holds it (the OS itself guarantees this, not a heuristic) —
-    release the lock, then remove the directory, reporting
-    `OrphanReclamationOutcome::Removed` (or `RemovalFailed` if the
-    removal itself fails; see `contracts/ephemeral_env_api.md` — the
-    public enum's variant is named `Removed`/`RemovalFailed`, not
-    `Orphaned`, since "orphaned" is the plain-English condition being
-    detected, while `Removed` is the outcome actually reported).
-  - **Lock acquisition fails because it's already held** (`fs4`'s
-    `TryLockError::WouldBlock`) → definitively `Active` (`StillActive`)
-    — never touched, regardless of how long the directory has existed.
-  - **The lock file doesn't exist, or exists but can't be opened/locked
-    for some other genuine I/O reason** (e.g. permission denied) →
-    `Unknown` — not touched, only reported. With the root lock in place,
-    this now means either a genuine I/O error (rare), or a directory
-    whose creator crashed *before* even reaching the point of creating
-    the lock file — itself only possible while that creator held the
-    root lock, so by the time this scan itself acquired the root lock,
-    that creator's attempt is fully over (dead or succeeded) and this
-    directory is safe to treat as `Unknown` (not `Removed`, to stay
-    conservative) rather than silently ignored.
-- A small JSON metadata file (`{pid, created_at, environment_id,
-  packages}`) is still written alongside the lock file, for
-  **diagnostics only** — it is human-debugging/observability information
-  (visible in `EphemeralLifecycleEvent`s and useful for a human
-  inspecting a leftover directory), and is explicitly **not** the
-  correctness mechanism orphan
-  detection relies on, unlike in the first two drafts of this decision.
-  **`process_start_time` renamed to `created_at`, and `packages` added
-  (a review finding, closed)**: an earlier draft carried
-  `process_start_time` forward from the superseded PID-matching design
-  below without ever specifying how to obtain it cross-platform once
-  `sysinfo` (that design's own dependency) was removed — `created_at` (a
-  plain `SystemTime::now()` wall-clock timestamp at publication time,
-  no platform-specific API needed) records the same "when was this
-  created" diagnostic without that dangling dependency question.
-  `packages` — the effective top-level package list this environment was
-  actually created with (FR-005/FR-006's resolved set, the same value an
-  `EphemeralLifecycleEvent`'s own `packages` field carries) — closes a
-  separate real gap: without it, an orphan-reclaimed environment's own
-  teardown event (emitted by the *reclaiming* process, which never made
-  the original creation request and so has no other way to know what was
-  installed) would have to leave FR-013's `packages` field empty or
-  omitted, silently violating that requirement for exactly this one
-  lifecycle path.
-
-```toml
-fs4 = { version = "1", features = ["sync"] }
+pub enum ReapOutcome {
+    Removed { id: EnvironmentId },
+    RemovalFailed { id: EnvironmentId, error: EphemeralEnvError },
+}
 ```
 
-**`Unknown` no longer needs an age-based escape hatch (corrected in this
-revision)**: the prior draft's age-based escalation from `Unknown` to
-`Removed` (after e.g. 24 hours) was a heuristic that couldn't actually
-prove an environment was no longer active — an unusually long-lived (if
-unlikely, given the one-shot usage model) environment with an
-inaccessible lock file could have been incorrectly reclaimed purely
-because it looked old, which would have violated FR-008's unconditional
-"never remove an environment still actively owned." The lock-based check
-above needs no such escape hatch: a lock-file-access failure genuinely
-means "we cannot determine liveness," a state that stays conservative
-(`Unknown`, never removed) indefinitely rather than eventually assuming
-orphaned status from age alone. If `Unknown` entries do accumulate in
-practice (e.g. a persistent permissions problem), that is a real signal
-worth surfacing to an operator, not something to paper over with a timer.
+`reap_ephemeral_environments()` resolves the managed root the same way
+`create_ephemeral_environment` does (`$ALLEZ_EPHEMERAL_ROOT`, falling
+back to the same per-user, per-installation temp-dir path — see the
+"same caller" path-naming decision below, which is unaffected by this
+revision), lists every entry directly under that root's `envs/`
+directory whose name parses as an `EnvironmentId`, and calls
+`cleanup.rs`'s `remove_prefix_dir()` — the same anchored, verified
+removal primitive the creation-failure rollback path already uses — on
+each one in turn. There is no liveness check of any kind: every entry
+found is removed unconditionally, regardless of whether some other
+process is still actively creating or using it. A removal failure for
+one entry is reported as `ReapOutcome::RemovalFailed` and does not
+prevent or affect any other entry's own outcome (FR-009); an empty
+`envs/` directory yields `Ok(vec![])`, not an error (FR-008's
+idempotency requirement). `Err(EphemeralEnvError::UnwritableLocation)` is
+returned only if the root itself cannot be securely opened/verified — a
+scan that cannot even start.
 
-**"Same caller" path naming (new in this revision)**: FR-008/SC-003
-require orphan reclamation to be scoped to "the same local user account
-and the same `allez` installation." The first draft's plain
-`std::env::temp_dir()` fallback doesn't encode either — two different OS
-users sharing one system temp directory (e.g. `/tmp` on Linux/macOS) would
-otherwise collide on the same path, or worse, one user's scan could
-observe another's environments. The fallback root is therefore:
+A *failed* creation attempt is unaffected by this decision: rolling back
+whatever partial directory a failed attempt created still happens
+synchronously, as part of the same `create_ephemeral_environment` call
+that discovered the failure — see `mod.rs`'s `fail_and_roll_back()` — and
+still reports a distinct `cleanup_error` if that rollback itself also
+fails (FR-004/FR-010). Only a *successfully completed* creation's own
+environment is now left alone rather than torn down automatically.
+
+**Rationale**: this is an explicit, deliberate simplification, not an
+oversight or an unconsidered regression. The automatic-teardown design
+this decision replaces required a `Drop`-guard, an OS-level advisory
+lock per environment, a second, coarse-grained root lock to serialize
+creation publication against reclamation scans, a diagnostics-only
+on-disk metadata file, and a multi-state internal lifecycle machine
+(`LifecycleState`) just to make a caller-initiated signal, a background
+reclamation scan, and an in-progress creation all correctly reconcile
+with one another — real complexity, maintained across four separate
+review cycles (see the revision notes at the top of this file) before
+this decision replaced it outright. Removing all of it in favor of one
+small, unconditional removal function trades away two guarantees the
+prior design provided — an environment is never removed by this
+feature while it's still genuinely in use, and leftover environments are
+reclaimed automatically without a caller having to remember to do
+anything — for a large reduction in surface area and failure modes. This
+trade is accepted as **temporary**: a caller (or an agent driving
+`allez`) that never invokes `reap_ephemeral_environments()` will
+accumulate ephemeral environments on disk indefinitely, and a caller
+that invokes it while another operation still needs an existing
+environment can corrupt or remove that environment out from under it —
+both are now the calling caller's own responsibility to avoid, not
+something this feature enforces. Safer, more automatic reclamation
+(e.g., reintroducing some form of liveness detection, or an exit-time
+cleanup hook, without reintroducing the full state-machine complexity
+above) is expected to be revisited in a future ticket.
+
+**Alternatives considered**: Keeping the full `Drop`-guard/advisory-lock/
+orphan-reclamation design and only fixing its remaining rough edges —
+rejected by explicit product decision; the team judged the complexity
+cost no longer worth it for this ticket's scope, preferring to ship a
+much simpler, explicit-only mechanism now and revisit automatic
+reclamation later once real usage patterns are better understood. A
+reap operation that *does* attempt some liveness check (e.g., reusing the
+removed design's advisory-lock idea, but only for reap rather than for a
+background scan) — deferred, not rejected outright; nothing in this
+decision precludes a future ticket adding one, but this ticket
+deliberately ships the simpler, unconditional version first.
+
+**"Same caller" path-naming (unaffected by this revision — carried
+forward from the superseded design)**: FR-008 scopes `reap_ephemeral_environments()`
+to "the same local user account and the same `allez` installation." The
+managed root is not a bare `std::env::temp_dir()` call, since two
+different OS users sharing one system temp directory (e.g. `/tmp` on
+Linux/macOS) would otherwise collide on the same path. The fallback root
+is therefore:
 
 ```text
 std::env::temp_dir().join(format!("allez-{user}-{install_hash}"))
@@ -578,264 +476,76 @@ boundary; the owner-only permission from the previous decision is) — and
 `{install_hash}` is a short hash of `std::env::current_exe()`'s
 canonicalized path, so two different `allez` binaries/checkouts on the
 same machine (e.g. during development) don't cross-scan each other's
-environments.
+environments. `{user}` is sanitized to a fixed safe character set before
+it ever reaches this `format!` call — never interpolated verbatim, since
+an attacker-influenced environment variable containing a path separator
+or a `..` segment could otherwise turn this into more than one path
+component. This is implemented in `paths.rs`'s `fallback_root_path()`.
 
-**`{user}` MUST be sanitized before use as a path component, never
-interpolated verbatim (a review finding, closed)**: `$USER`/`$LOGNAME`/
-`%USERNAME%` are ordinary environment variables, fully controllable by
-whatever set them — a value containing a path separator (`/`, `\`), a
-`..` traversal segment, or other characters `std::path::Path` would
-treat specially could turn `format!("allez-{user}-{install_hash}")` into
-something other than the single, flat path component this design
-requires, defeating the later single-component no-follow-open check
-`paths.rs` performs against it. Before formatting it into the fallback
-path, `{user}` MUST be reduced to a fixed, safe character set (e.g.
-ASCII alphanumerics plus `_`/`-`, with every other byte either dropped
-or hex-escaped) — or, more simply and robustly, hashed into the same
-short digest `{install_hash}` already uses, so the raw environment
-variable's own bytes never reach a path-construction call at all. Either
-approach keeps two different accounts' fallback paths distinct (the
-actual requirement) without trusting an arbitrary environment variable's
-contents to already be filesystem-safe. The real enforcement of "same local user account" is the
-owner-only permission on this directory itself, established atomically at
-creation per the previous decision: a second OS user attempting to use
-the *same* resolved path (e.g. if `{user}` were ever empty on both sides)
-would simply fail to create/read it at all, which is an acceptable,
-documented limitation rather than a silent security gap.
+**Explicit `$ALLEZ_EPHEMERAL_ROOT` and the same install-hash scoping**:
+the `{install_hash}` component above exists only for the *fallback*
+path — an explicitly-set `$ALLEZ_EPHEMERAL_ROOT` is honored verbatim,
+with no install-hash suffix appended to it. If a caller deliberately
+points two separate `allez` installations at the *same* explicit
+`$ALLEZ_EPHEMERAL_ROOT` value, `reap_ephemeral_environments()` run from
+either one will remove environments the other created too — this is
+intentional, not a gap: an explicit override is, by definition, the
+caller choosing the scope themselves.
 
-**Explicit `$ALLEZ_EPHEMERAL_ROOT` and the same install-hash scoping (a
-review finding, closed)**: the `{install_hash}` component above exists
-only for the *fallback* path — an explicitly-set `$ALLEZ_EPHEMERAL_ROOT`
-is honored verbatim, with no install-hash suffix appended to it. If a
-caller deliberately points two separate `allez` installations at the
-*same* explicit `$ALLEZ_EPHEMERAL_ROOT` value, they will share one
-orphan-reclamation scope and one lock/cache namespace, which reads as
-looser than FR-008/SC-003's "same `allez` installation" scoping if taken
-as an automatic guarantee. This is intentional, not a gap: an explicit
-override is, by definition, the caller choosing the scope themselves —
-the install-hash suffix exists specifically to give two *unconfigured*
-installations a collision-free default, not to second-guess a caller who
-explicitly opted into sharing a directory. A caller that wants
-per-installation isolation under an explicit root remains free to set a
-distinct `$ALLEZ_EPHEMERAL_ROOT` value per installation (e.g. by
-including its own install-hash-equivalent in the value it chooses); this
-feature does not impose that choice on the caller's behalf.
+**Secure create-or-verify on reuse (unaffected by this revision — carried
+forward from the superseded design)**: because the fallback path name is
+predictable (derivable by anyone who can read `$USER`/`current_exe()`'s
+path), a malicious local process could attempt to pre-create it — as a
+symlink to somewhere else, or with unexpected ownership/permissions —
+before this feature's own first legitimate use. `paths.rs`'s
+`verified_root()` never simply "creates if absent, else trusts what's
+there": it opens the root (and each of its long-lived children —
+`envs/`, `cache/packages/`, `cache/repodata/`) with no-follow semantics
+(Unix `O_NOFOLLOW`; Windows a `CreateFileW` open with
+`FILE_FLAG_OPEN_REPARSE_POINT`, which opens a reparse point/symlink as
+itself rather than transparently following it), verifies ownership and
+permissions on that already-open handle (never a second, separate
+path-based `stat`), and anchors every subsequent operation to that
+handle rather than re-resolving `$ALLEZ_EPHEMERAL_ROOT` as a fresh path
+string each time. This applies identically whether the root came from an
+explicitly-set `$ALLEZ_EPHEMERAL_ROOT` or the predictable fallback path —
+there is no "trust it, the caller configured it explicitly" shortcut for
+the former.
 
-**Secure create-or-verify on reuse (new in this revision; strengthened in
-the third review cycle; scope clarified in a later review — see the note
-at the end of this section)**: because this fallback path name is predictable
-(derivable by anyone who can read `$USER`/`current_exe()`'s path), a
-malicious local process could attempt to pre-create it — as a symlink to
-somewhere else, or with unexpected ownership/permissions — before this
-feature's own first legitimate use. This feature therefore never simply
-"creates if absent, else trusts what's there." **A check-then-use by path
-string is not sufficient on its own** — `symlink_metadata` followed by a
-later, separate path-based operation leaves a TOCTOU window in which the
-path could be replaced between the check and the use. This feature MUST
-instead:
+**Anchoring extends to per-environment directory creation and removal
+too, not just the shared root's own subdirectories (unaffected by this
+revision — carried forward from the superseded design)**: each
+individual ephemeral environment's own directory (a new, ULID-named
+subdirectory under `envs/`) is created fresh by `permissions.rs` on
+every `create_ephemeral_environment` call, and removed — by the
+creation-failure rollback path or by `reap_ephemeral_environments()` —
+by `cleanup.rs`'s `remove_prefix_dir()`. On Unix, both operations are
+anchored to the verified root's own already-open `envs/` directory
+descriptor (`rustix::fs::mkdirat`/`openat`/`unlinkat`-style relative
+operations), never a bare, independently-resolved path string.
+`mkdirat`'s own mode argument (`0o700`) is passed directly at creation
+time — the directory never exists with a broader-than-owner-only mode,
+even transiently, and no `umask` manipulation is needed or used (`umask`
+can only narrow a requested mode, never widen it, so `0o700` passed
+directly already guarantees the result). `remove_prefix_dir()`
+re-verifies its target immediately before removing it — a real
+directory owned by the current user, not a symlink — via the same
+anchored, no-follow discipline. On Windows, no ergonomic,
+handle-relative equivalent of `openat`/`mkdirat` exists without a
+materially larger `unsafe` surface than this ticket's already-scoped ACL
+exception; both creation and removal instead re-verify via a fresh
+no-follow `CreateFileW` open against the already-verified root's own
+canonical path (captured once at verification time, never re-resolved as
+a fresh string later) immediately before acting — narrowing, not fully
+eliminating, the Windows-specific residual TOCTOU window, accepted for
+the same reason the ACL exception itself is (see `plan.md`'s Complexity
+Tracking).
 
-1. Open the fallback root with no-follow semantics (Unix: open the parent
-   directory and open/create the target component relative to it with
-   `O_NOFOLLOW` — e.g. via `std::os::unix::fs::OpenOptionsExt`'s
-   `custom_flags(libc::O_NOFOLLOW)` or an equivalent no-follow primitive;
-   Windows: **corrected in this revision — the original wording here was
-   backwards**: `CreateFileW` *without* `FILE_FLAG_OPEN_REPARSE_POINT`
-   transparently *follows* a reparse point/symlink rather than rejecting
-   it, which would defeat the whole point of this check. The actual
-   no-follow sequence is `CreateFileW` *with* both
-   `FILE_FLAG_OPEN_REPARSE_POINT` (opens the reparse point itself, does
-   not follow it) and `FILE_FLAG_BACKUP_SEMANTICS` (required to open a
-   directory handle at all via `CreateFileW`), then inspecting the
-   returned handle's `dwFileAttributes` for `FILE_ATTRIBUTE_REPARSE_POINT`
-   and failing closed if it's set — a legitimate, freshly-created
-   directory will never carry that attribute), obtaining an open directory
-   handle/descriptor as part of the same operation that verifies it — not
-   two separate steps.
-2. Verify ownership and permissions **on that open handle** (e.g. via
-   `File::metadata()`/`fstat`-equivalent on the already-open descriptor,
-   never a second `stat`-by-path call), and fail closed
-   (`EphemeralEnvError::UnwritableLocation`) if it isn't a real directory
-   owned by the current user with exactly the expected restrictive
-   permissions.
-3. **Anchor every subsequent sensitive operation for this root to that
-   already-open, already-verified handle** — e.g. via `openat`-style
-   relative opens for `envs/`, `cache/packages/`, `cache/repodata/`
-   underneath it — rather than re-resolving `$ALLEZ_EPHEMERAL_ROOT/...`
-   as a fresh path string each time, which would silently reopen the
-   TOCTOU window this check was meant to close. This is a firm
-   requirement, not an optional refinement: verifying a path and then
-   operating on that path *by string* again elsewhere defeats the point
-   of the verification.
-
-**Scope clarification (a security-review finding, closed)**: this
-entire secure-open/verify/anchor sequence applies identically whether the
-root came from an explicitly-set `$ALLEZ_EPHEMERAL_ROOT` or from the
-predictable fallback path described above. An earlier framing described
-this hardening only in the context of the fallback path's specific
-predictability problem, which could be misread as "only the fallback
-needs this" — it does not follow that an explicitly-configured root is
-exempt: a caller-supplied `$ALLEZ_EPHEMERAL_ROOT` could equally point at
-a path a different local user, or a symlink, has already tampered with
-before this feature's first use, for entirely unrelated reasons (a
-misconfigured sandbox profile, a shared CI cache directory, etc.) — the
-predictability of the *fallback* path was only ever the reason this gap
-was *noticed*, not the boundary of where the fix applies. `paths.rs`
-MUST run this exact same no-follow-open → verify-on-handle →
-anchor-everything sequence against whichever root it resolves to,
-explicit or fallback, with no special-cased "trust it, the caller
-configured it explicitly" shortcut for the former.
-
-**Anchoring extends to per-environment directory creation too, not just
-the shared root's own subdirectories (a further security-review
-finding, closed with a deliberate, proportionate Unix/Windows split)**:
-`paths.rs`'s anchoring above covers `envs/`, `cache/packages/`,
-`cache/repodata/` as fixed subdirectories of the verified root — but each
-*individual* ephemeral environment's own directory (a new, ULID-named
-subdirectory *under* `envs/`, created fresh by `permissions.rs` on
-every `create_ephemeral_environment` call, not just once at startup) is
-a separate creation event happening continuously throughout this
-feature's runtime, not a one-time root check. To close the same class of
-TOCTOU gap for *that* creation too:
-
-- **Unix**: `permissions.rs` MUST accept the already-open, already-verified
-  `envs/` directory handle/descriptor from `paths.rs` (not a bare path
-  string) and create the new ULID-named directory *relative to that
-  handle*, atomically owner-only from the moment it exists — never a
-  broader-than-`0o700` mode for even a transient window before a
-  follow-up tightening call. `rustix::fs::mkdirat` (the `rustix` crate is
-  already in this feature's dependency tree transitively via `fs4`;
-  adding it as a direct dependency for this purpose is a small, justified
-  addition, not a new supply-chain surface) takes its own `Mode`
-  parameter directly — pass `Mode::from_raw_mode(0o700)` (or the
-  equivalent typed constant) to that call itself. **No `umask` handling
-  is needed here, and none should be added (correcting a real bug an
-  earlier draft introduced)**: `umask` only ever *removes* permission
-  bits from a syscall's requested mode — it can never *widen* it beyond
-  what was requested — so passing `0o700` directly to `mkdirat` already
-  guarantees the resulting directory is *at most* owner-only regardless
-  of the ambient umask (a restrictive ambient umask can only make the
-  actual result a strict subset of `0o700`, never broader). Temporarily
-  mutating the *process-wide* `umask` around this call would not close
-  any gap this design actually has, while introducing a real one: `umask`
-  is global process state in a multithreaded Tokio runtime, so scoping a
-  mutation to "just this call" is not actually possible — a concurrent
-  directory-creation elsewhere in the same process (a sibling
-  `create_ephemeral_environment` call, or `tempfile`'s own usage) could
-  observe the temporarily-narrowed umask and end up with an unintended
-  mode, or race the restore. No separate `fchmodat` follow-up call is
-  needed either, for the same reason `mkdirat`'s own mode argument is
-  already sufficient. This closes the gap completely on Unix.
-- **Windows**: no ergonomic, safe, `std`/`windows-sys`-level equivalent of
-  `openat`/`mkdirat` exists for directory creation without a materially
-  larger `unsafe` surface (raw `NtCreateFile` with a `RootDirectory` field
-  in `OBJECT_ATTRIBUTES`) than the one `// SAFETY:`-documented exception
-  already scoped for ACL-setting in this same module (see Complexity
-  Tracking in `plan.md`). **Accepted, documented limitation for this
-  ticket**: on Windows, the new environment directory is still created via
-  a path string, constructed by joining the *already-verified* root's own
-  canonical path (captured once, at `paths.rs`'s verification time, not
-  re-resolved from `$ALLEZ_EPHEMERAL_ROOT` as a fresh string later) with
-  the ULID directory name. This narrows, but does not eliminate, the
-  Windows-specific residual TOCTOU window between root verification and
-  this later per-environment creation — accepted because closing it fully
-  would require expanding this ticket's one documented `unsafe` FFI
-  exception into a second, larger one for comparatively low incremental
-  risk (a local attacker would need to race a specific, narrow window on
-  every single environment creation, on Windows specifically, against a
-  root whose ownership was already verified once). Revisit only if a
-  future security review finds this gap is actually being exploited in
-  practice, not preemptively.
-
-**Anchoring extends to removal too, not only creation (a further
-security-review finding, closed with the same deliberate, proportionate
-Unix/Windows split as above)**: `cleanup.rs`'s `remove_prefix_dir()`
-is the **one** removal implementation every teardown/cleanup/
-reclamation path in this feature calls — closing the creation-side
-TOCTOU gap above is pointless if the later removal of that same
-directory re-resolves it as a fresh, unverified path string, reopening
-an equivalent window. Unlike creation (a single moment in time), an
-environment's eventual removal can happen an arbitrarily long time
-later — a `Ready` environment may sit untouched for a while, and an
-orphaned one may not be discovered until a much later reclamation scan
-— so this window is not merely as narrow as the creation-side one.
-
-**Signature, not just prose (a review finding, closed — an earlier
-draft described this anchoring requirement only in prose, against a
-`remove_prefix_dir(path: &Path)` signature that has no parameter capable
-of actually carrying an open, verified handle, making the requirement
-unimplementable as literally specified)**: `remove_prefix_dir(root:
-&VerifiedRoot, id: EnvironmentId) -> Result<(), EphemeralEnvError>` takes
-the same `VerifiedRoot` handle type `publish_environment()` and
-`permissions.rs` already anchor their own operations to, plus the
-target environment's `EnvironmentId` (which maps deterministically to
-its own ULID-named subdirectory of `envs/` — never an arbitrary,
-caller-supplied path component) — never a bare, independently-resolved
-`Path`. This is also why `orphan.rs`'s reclamation scan MUST call
-`cleanup.rs`'s `remove_prefix_dir()` for every actual removal it
-performs, rather than implementing a second, independent removal
-routine of its own: reclamation's own `Removed` outcome has to be
-produced by calling this exact function, or the "one removal
-implementation every path calls" guarantee above stops being true.
-
-- **Unix**: `remove_prefix_dir()` MUST verify, immediately before
-  removing, that its target is a real directory owned by the current
-  user (not a symlink) — anchored to the same open, already-verified
-  `envs/` directory handle `paths.rs` provides (reachable from the
-  passed-in `VerifiedRoot`), using `openat`/`unlinkat`-style relative
-  operations (`rustix::fs`) for the recursive walk itself, never
-  `std::fs::remove_dir_all` on a bare path string. This closes the gap
-  completely on Unix, the same as the creation-side fix above.
-- **Windows**: the same accepted, documented limitation as
-  per-environment creation above applies here too, for the same reason
-  (no ergonomic handle-relative recursive-delete primitive exists
-  without a materially larger `unsafe` surface than this ticket's one
-  already-scoped exception) — `remove_prefix_dir()` re-verifies the
-  target path's ownership via a fresh, no-follow `CreateFileW` open (the
-  same primitive `paths.rs` uses for the root) immediately before
-  removing it, narrowing but not eliminating the residual window, on the
-  same "revisit only if actually exploited" basis already accepted for
-  creation.
-
-**Rationale**: The `Drop`-guard-plus-advisory-lock combination is the
-standard, currently-maintained pattern for this exact problem on all four
-target platforms. **Note this rationale no longer relies on PID-plus-start-time
-matching** — that heuristic was superseded by the `fs4`-based advisory-lock
-design above during the third review cycle (see that Decision's own
-citation); the diagnostics-only metadata file still records
-`{pid, created_at, environment_id, packages}` for a human inspecting a leftover directory,
-but the actual liveness determination is the lock-acquisition attempt,
-full stop. Re-checking liveness
-immediately before deletion (not just at scan time) narrows, but does not
-eliminate, the TOCTOU window between "classified as orphaned" and
-"actually removed" — this residual risk is accepted and documented rather
-than solved with cross-process locking, since the spec's own FR-008
-wording only requires best-effort determination, not a distributed lock.
-
-**Alternatives considered**: Relying solely on OS temp-directory
-expiration/cleanup conventions — rejected per the spec's own Assumptions.
-A full process-supervisor/watchdog approach — rejected as unnecessary
-complexity for a one-shot, agent-invoked library. Encoding the real OS
-UID (via the `libc` crate) instead of `$USER`/`$LOGNAME` — considered, but
-rejected for this ticket as an unnecessary extra dependency given the real
-security boundary is the owner-only permission, not the path name;
-revisit if the env-var approach proves insufficient in practice.
-
-*Source: librarian research task `bg_e342f133`, citing the `Drop`-guard
-liveness-detection pattern; metadata-publication-race and "same caller"
-path-naming corrections added
-during the first plan review; `sysinfo`-based PID/start-time liveness
-checking was replaced with `fs4`-based OS advisory-file-locking during the
-third review cycle (see the Decision above) — `fs4`'s own release-on-close
-guarantee gives a definitive liveness signal that a PID/start-time
-heuristic could only approximate; `sysinfo` is no longer a dependency of
-this ticket; the root-level `.root.lock` serialization was added during
-the fourth review cycle to close a residual creation/reclamation race the
-third cycle's "same synchronous step" wording overclaimed. The
-process-wide `ctrlc` signal handler this decision originally proposed was
-removed entirely during a later review pass (see the Decision above) —
-`allez` is agent-invoked, never human-invoked, so there is no interrupt
-signal for it to catch; `ctrlc` is no longer a dependency of this ticket
-at all.*
+*Source: librarian research task `bg_e342f133` (original "same caller"
+path-naming and secure-open/verify research, largely unaffected by this
+revision); this section's own "Explicit reap, no automatic reaping"
+decision itself has no external citation — it is a straightforward
+product/scope decision, not a technical unknown requiring research.*
 
 ## Decision: Ephemeral location + package/repodata cache (long-lived and shared, not run-scoped)
 
@@ -843,15 +553,19 @@ at all.*
 lives under `$ALLEZ_EPHEMERAL_ROOT` (falling back to the per-user,
 per-installation temp-dir path above) in a uniquely-named subdirectory
 (`<root>/envs/<ULID>/`), created with owner-only permissions per the
-decisions above — this part is unchanged and remains one-shot/torn-down
-per environment. The package-download cache and repodata cache
+decisions above — this part is unchanged. **(Revised — "Explicit reap, no
+automatic reaping" above)**: this directory is no longer described as
+"torn-down per environment" automatically; it persists until an explicit
+`reap_ephemeral_environments()` call removes it (or a failed creation
+attempt's own rollback removes it immediately, per that decision). The
+package-download cache and repodata cache
 (`<root>/cache/packages/`, `<root>/cache/repodata/`) are, however,
 **deliberately long-lived and shared across every ephemeral environment
 this installation ever creates** — created once, reused by every
-subsequent `create_ephemeral_environment` call, **never removed by any
-individual environment's teardown, and never scanned or touched by
-`reclaim_orphaned_environments()`.** Both cache directories still get the
-same owner-only permission treatment at creation.
+subsequent `create_ephemeral_environment` call, **never removed by
+`reap_ephemeral_environments()` or by a failed creation's own rollback.**
+Both cache directories still get the same owner-only permission treatment
+at creation.
 
 **Rationale**: the first draft described this cache as "this-run-scoped,
 non-shared," which both contradicted its own fixed, reused path
@@ -861,18 +575,18 @@ was a worse design than what spec.md's own Assumptions already permit:
 its own shared package-download cache across separate ephemeral
 environments (for performance) is not defined by this feature and is
 deferred to whichever ticket addresses performance (e.g. GEN-32); this
-feature's own guarantee is only that the ephemeral environment's directory
-and the packages installed into it are removed on teardown." A shared,
-persistent cache is explicitly anticipated by that wording — and GEN-32's
-own acceptance criteria need a real cold-vs-warm-cache distinction to have
-anything to benchmark; a cache whose lifetime is tied to a single
-environment's lifetime can never produce a "warm" case at all. FR-007's/
-SC-002's "fully removed" guarantee is unaffected: it describes the
-*environment prefix* (`<root>/envs/<id>/`), which was never a package's
-own download-cache location to begin with (rattler's install pipeline
-downloads into the cache, then links/copies from there into the prefix —
-the cache and the prefix are already two different directories in every
-draft of this plan).
+feature's own guarantee is only that the reap operation removes the
+ephemeral environment's directory and the packages installed into it."
+A shared, persistent cache is explicitly anticipated by that wording —
+and GEN-32's own acceptance criteria need a real cold-vs-warm-cache
+distinction to have anything to benchmark; a cache whose lifetime is tied
+to a single environment's lifetime can never produce a "warm" case at
+all. FR-008's/SC-002's "fully removed" guarantee is unaffected: it
+describes the *environment prefix* (`<root>/envs/<id>/`), which was
+never a package's own download-cache location to begin with (rattler's
+install pipeline downloads into the cache, then links/copies from there
+into the prefix — the cache and the prefix are already two different
+directories in every draft of this plan).
 
 **Residual risk, corrected in this revision**: a package's own executed code
 (inside a running environment) could reach the shared cache directory if
@@ -1015,7 +729,7 @@ directly against Jira during plan review.*
 (a handful of tiny `noarch` packages with known names/versions/hashes,
 generated once and checked in, mirroring the existing
 `conformance/condarc/*` fixture pattern) for the integration tests that
-exercise the real solve → install → teardown path. Tests specifically
+exercise the real solve → install → reap path. Tests specifically
 needing live, real-world channels follow the same opt-in pattern as
 `condarc_conformance`: gated behind a Cargo feature, off by default —
 concretely, `network-tests` (no longer just an illustrative name: this is

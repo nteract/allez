@@ -93,6 +93,11 @@ impl std::error::Error for EphemeralEnvError {}
 /// A creation failure and an optional failure while cleaning it up.
 #[derive(Clone)]
 pub struct CreationFailure {
+    /// The environment identifier this failed attempt would have used —
+    /// present so a caller/test can correlate this failure with the
+    /// `EphemeralLifecycleEvent`s this attempt still emitted (FR-013),
+    /// even though no [`super::ReadyEnvironment`] was ever produced.
+    pub id: super::EnvironmentId,
     /// Why environment creation failed.
     pub error: EphemeralEnvError,
     /// Why cleanup of a partially-created environment failed, when it did.
@@ -103,6 +108,7 @@ impl fmt::Debug for CreationFailure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("CreationFailure")
+            .field("id", &self.id)
             .field("error", &self.error)
             .field("cleanup_error", &self.cleanup_error)
             .finish()
@@ -146,6 +152,7 @@ mod tests {
     use crate::error::CategorizedError;
 
     use super::{CreationFailure, EphemeralEnvError};
+    use crate::ephemeral::EnvironmentId;
 
     #[test]
     fn ephemeral_error_categories_match_the_fixed_contract() {
@@ -179,6 +186,7 @@ mod tests {
     #[test]
     fn creation_failure_without_cleanup_error_displays_creation_error() {
         let failure = CreationFailure {
+            id: EnvironmentId::new(),
             error: EphemeralEnvError::UnwritableLocation,
             cleanup_error: None,
         };
@@ -192,6 +200,7 @@ mod tests {
     #[test]
     fn creation_failure_with_cleanup_error_displays_both_errors() {
         let failure = CreationFailure {
+            id: EnvironmentId::new(),
             error: EphemeralEnvError::UnwritableLocation,
             cleanup_error: Some(EphemeralEnvError::TeardownFailed),
         };
@@ -205,6 +214,7 @@ mod tests {
     #[test]
     fn creation_failure_source_is_the_original_error() {
         let failure = CreationFailure {
+            id: EnvironmentId::new(),
             error: EphemeralEnvError::NoChannelsConfigured,
             cleanup_error: None,
         };
@@ -277,6 +287,7 @@ mod tests {
     #[test]
     fn creation_failure_debug_redacts_credential_bearing_errors() {
         let failure = CreationFailure {
+            id: EnvironmentId::new(),
             error: EphemeralEnvError::UnresolvablePackage {
                 package: "https://user:password@repo.example/t/token-123/numpy".to_string(),
             },

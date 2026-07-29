@@ -5,9 +5,7 @@ its Assumptions section is explicit that wiring into `allez oneshot`'s CLI
 surface is a separate ticket (GEN-25). This contract is what GEN-25 (and
 any other in-process caller, including tests) can rely on. It lives at a
 new top-level module, `src/ephemeral/mod.rs`, re-exported as
-`allez::ephemeral::*` via a new `src/lib.rs` (see `plan.md` § Project
-Structure — the crate is binary-only today; this ticket adds a library
-target).
+`allez::ephemeral::*` via `src/lib.rs`.
 
 Per Constitution III (Dual-Primary Interface), this contract does not
 itself need a `--format json`/human split — that split is GEN-25's job,
@@ -22,6 +20,13 @@ contract — a private channel simply fails like any other unreachable one
 entirely on `rattler_cache`'s own built-in behavior, accepted as-is per
 explicit product decision (see `research.md`).
 
+**Explicit reap, no automatic reaping**: this contract's removal side is
+a single, standalone function — `reap_ephemeral_environments()` — that
+removes every ephemeral environment it finds unconditionally, with no
+per-environment teardown signal, no handle type, and no liveness/orphan
+detection of any kind. See `spec.md`'s User Story 2 and `research.md`'s
+"Explicit reap, no automatic reaping" decision for the full rationale.
+
 The function/method signatures below are shown **without bodies**,
 matching how a trait interface is documented — they are the contract
 this ticket's implementation must satisfy, not literal standalone
@@ -32,164 +37,80 @@ etc.) are defined in full, with bodies, either inline here or in
 ## Public functions
 
 ```rust
-/// Requests creation of a new ephemeral environment. Returns immediately
-/// with a handle usable to signal teardown right away (FR-001) — creation
-/// itself proceeds asynchronously (spawned onto the Tokio runtime this
-/// function requires to already be running, matching the rest of the
-/// crate's async boundary).
+/// Creates a new ephemeral environment: a system-managed temporary/cache
+/// location (no name or path supplied by the caller), populated with the
+/// requested (or default/overridden) packages, resolved and installed
+/// against `channels`. Resolves once creation finishes, one way or the
+/// other (FR-001) — there is no intermediate handle type; this is a
+/// plain, directly-awaited `async fn`.
 ///
 /// `requested` may be `RequestedPackages::Explicit(vec![])` — this is
-/// treated identically to `UseDefaultOrOverride` (corrected in the third
-/// review cycle: an earlier revision of this doc comment claimed the
-/// opposite — that an empty explicit list was NOT the same as
-/// `UseDefaultOrOverride` — which turned out to contradict FR-005 itself,
-/// not merely this contract's own earlier design; see `data-model.md`).
+/// treated identically to `UseDefaultOrOverride` (see `data-model.md`).
 /// `RequestedPackages::from_cli(_)` remains a convenience for translating
 /// a raw, possibly-empty caller-supplied list, but is not required for
 /// correctness.
-pub fn create_ephemeral_environment(
+///
+/// The returned `ReadyEnvironment` is **not** torn down when it (or its
+/// last clone) is dropped, and there is no way to signal teardown for a
+/// single environment — see [`reap_ephemeral_environments`] below. It
+/// stays on disk, usable, until a caller later calls that function.
+pub async fn create_ephemeral_environment(
     requested: RequestedPackages,
     channels: ChannelConfig,
     default_override: Option<Vec<PackageSpec>>,
-) -> EphemeralEnvironmentHandle;
+) -> Result<ReadyEnvironment, CreationFailure>;
 ```
 
 ```rust
-impl EphemeralEnvironmentHandle {
-    /// This handle's identifier — stable for its whole lifecycle, and the
-    /// value every `EphemeralLifecycleEvent` for this environment carries
-    /// (FR-013/SC-008).
-    pub fn id(&self) -> EnvironmentId;
+/// Removes every ephemeral environment found on disk for the current
+/// local user account and `allez` installation — unconditionally,
+/// without attempting to detect whether one is still in use elsewhere.
+/// Callers are responsible for only invoking this when doing so is safe
+/// (e.g. no other concurrent `allez` invocation still needs a live
+/// environment). See this module's own doc comment and `spec.md`'s User
+/// Story 2.
+///
+/// Processes each environment it finds independently (FR-009): a
+/// removal failure for one is reported as `ReapOutcome::RemovalFailed`
+/// without preventing or affecting any other environment's own outcome.
+/// Returns `Ok(vec![])`, not an error, when no ephemeral environments
+/// exist (FR-008's idempotency requirement) — including on a second,
+/// immediately-repeated call after a first call already removed
+/// everything.
+///
+/// # Errors
+///
+/// Returns [`EphemeralEnvError::UnwritableLocation`] if the root itself
+/// cannot be securely opened or created — a scan that could not even
+/// start, distinct from `Ok(vec![])` ("scanned, found nothing").
+pub fn reap_ephemeral_environments() -> Result<Vec<ReapOutcome>, EphemeralEnvError>;
 
-    /// Signals teardown. Never blocks waiting for removal to finish —
-    /// idempotent and non-blocking per FR-012. See `data-model.md`'s
-    /// `LifecycleState` transition table for the exhaustive no-op/
-    /// folds-in/starts-the-attempt behavior for every possible current
-    /// state, including a creation-failure's own in-flight cleanup.
-    pub fn signal_teardown(&self);
-
-    /// Resolves once creation finishes, one way or the other —
-    /// including waiting through an in-progress cleanup after a creation
-    /// failure (`CreationFailed { cleanup: Running, .. }` is explicitly
-    /// NOT terminal; corrected in the third review cycle — see
-    /// `data-model.md` for why an earlier revision could return
-    /// prematurely with a since-then-discovered cleanup failure silently
-    /// dropped). `CreationFailure` (not a bare `EphemeralEnvError`) so a
-    /// cleanup failure following a creation failure can be reported
-    /// alongside the original error, per FR-010 — see `data-model.md`.
-    /// `CreationFailure` implements `std::error::Error`/`Display`, so
-    /// `handle.await_ready().await?` works directly with `?` (needed by
-    /// the quickstart's manual smoke test). Always reports the *original*
-    /// creation outcome even if `signal_teardown()` was already called
-    /// (before or after this method) and has since moved this handle on
-    /// to `TearingDown`/`TornDown` — a fourth correction, see
-    /// `data-model.md`'s `EphemeralEnvironmentHandle`/`LifecycleState`
-    /// sections for the decoupled internal cell this relies on.
-    pub async fn await_ready(&self) -> Result<ReadyEnvironment, CreationFailure>;
-
-    /// Resolves once a signaled teardown actually completes (success), or
-    /// the distinct teardown-failure category if removal itself failed.
-    /// Awaiting this without ever calling `signal_teardown()` first waits
-    /// indefinitely, **except one case (see `data-model.md`'s
-    /// `LifecycleState` section): if creation itself failed and that
-    /// failure's own cleanup has already resolved
-    /// (`CreationFailed { cleanup: Succeeded | Failed(_), .. }`), this
-    /// resolves immediately — that cleanup attempt *was* this
-    /// environment's teardown, so there is nothing further to wait for**.
-    /// Callers needing "torn down or still active" polling for a
-    /// successfully-created environment should await this only after
-    /// calling `signal_teardown()`.
-    pub async fn await_torn_down(&self) -> Result<(), EphemeralEnvError>;
-
-    /// Non-blocking. `ReclamationStatus::Scanning` while the automatic
-    /// scan this handle's own creation request triggered (FR-008) is
-    /// still running; `ReclamationStatus::Complete(outcomes)` once it
-    /// finishes — this is the distinct signal FR-008 requires, decoupled
-    /// from this handle's own creation outcome. (Corrected in this
-    /// revision from a bare `Vec<OrphanReclamationOutcome>`, which
-    /// couldn't distinguish "still scanning" from "found nothing.")
-    /// `ReclamationStatus::Failed(error)` if the scan itself could not
-    /// even start (e.g. the root's own secure-open/verify check failed) —
-    /// **new in this revision**: distinct from `Complete(vec![])`
-    /// ("scanned, found zero leftover directories"), since collapsing
-    /// the two would let a caller wrongly conclude no orphans exist when
-    /// reclamation never actually ran. See `data-model.md`.
-    pub fn reclamation_outcomes(&self) -> ReclamationStatus;
-}
-
-pub enum ReclamationStatus {
-    Scanning,
-    Complete(Vec<OrphanReclamationOutcome>),
-    Failed(EphemeralEnvError),
-}
-```
-
-```rust
-/// Scans for and removes/reports any ephemeral environment left behind by
-/// a prior, no-longer-running process for the same local user account and
-/// `allez` installation (FR-008/SC-003). Called automatically as the first
-/// step of `create_ephemeral_environment` (its results surfaced via
-/// `EphemeralEnvironmentHandle::reclamation_outcomes`), and also exposed
-/// standalone so tests can exercise orphan reclamation deterministically.
-/// Returns `Err(EphemeralEnvError::UnwritableLocation)` — **new in this
-/// revision** — if the scan itself cannot even start (the root or its
-/// `.root.lock` fails the same secure-open/verify check `paths.rs`
-/// requires elsewhere), so this failure is never silently indistinguishable
-/// from `Ok(vec![])` ("scanned, found nothing"). See `data-model.md`'s
-/// `ReclamationStatus::Failed` for how this surfaces through the
-/// automatic, handle-driven path.
-/// Liveness is determined definitively via a non-blocking attempt to
-/// acquire each candidate directory's own OS-level advisory lock (`fs4`;
-/// `flock`/`LockFileEx` under the hood), not by inspecting a PID — an
-/// acquired lock means the owning process is verifiably gone (the OS
-/// itself releases the lock on process exit, including `SIGKILL`); a
-/// held lock means it's still `StillActive`, regardless of the
-/// directory's age. `Unknown` (corrected in the third review cycle) is
-/// now reserved for a genuine I/O error opening/locking the lock file
-/// itself (e.g. permission denied) — not for "metadata hasn't been
-/// written yet," which the lock-based design no longer has as a race —
-/// and is never removed, matching FR-008's conservative "never remove
-/// something still actively owned" guarantee.
-pub fn reclaim_orphaned_environments() -> Result<Vec<OrphanReclamationOutcome>, EphemeralEnvError>;
-
-pub enum OrphanReclamationOutcome {
+/// One environment's outcome from a [`reap_ephemeral_environments`] call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReapOutcome {
+    /// The environment's directory was removed.
     Removed { id: EnvironmentId },
-    RemovalFailed { id: EnvironmentId, error: EphemeralEnvError }, // category: TeardownFailed
-    StillActive { id: EnvironmentId },       // lock is held; not touched
-    Unknown { id: EnvironmentId },           // lock file access itself failed (e.g. permission denied); not touched, conservative
+    /// The environment's directory could not be removed.
+    RemovalFailed { id: EnvironmentId, error: EphemeralEnvError },
 }
 ```
 
 ## Public types (full field definitions; see `data-model.md` for rationale)
 
 ```rust
-pub struct EphemeralEnvironmentHandle { /* opaque; see methods above */ }
-
 #[derive(Debug, Clone)]
 pub struct ReadyEnvironment {
     pub id: EnvironmentId,
     pub location: std::path::PathBuf,
     pub installed_packages: Vec<InstalledPackage>,
-    // (private, not part of this contract's own public surface — but
-    // its PRESENCE is a correctness requirement, not optional: closes a
-    // real use-after-drop hazard a review found. `handle.await_ready().await?`,
-    // chained on a temporary with no `let handle = ...;` binding kept
-    // around (this contract's own documented usage pattern above), drops
-    // that temporary the instant the statement ends; without this field
-    // independently keeping the same cleanup guard alive, that drop
-    // would remove the environment before the very next line ever uses
-    // the `ReadyEnvironment` just returned. See `data-model.md` for the
-    // exact type (`Arc<CleanupGuard>` — the same one
-    // `EphemeralEnvironmentHandle` itself holds) and full rationale.
-    keep_alive: std::sync::Arc<()>, // (opaque placeholder here; real type is crate-internal `CleanupGuard`)
 }
 
 impl ReadyEnvironment {
     /// PATH/env-var overlay for running a command inside this environment
     /// (GEN-25's own requirement). Returns `ActivationError`, not
-    /// `EphemeralEnvError` — activation isn't a create/install/teardown
-    /// operation, so it doesn't belong in FR-010's closed category set
-    /// (corrected in this revision). See `data-model.md`.
+    /// `EphemeralEnvError` — activation isn't a create/install/reap
+    /// operation, so it doesn't belong in FR-010's closed category set.
+    /// See `data-model.md`.
     pub fn activation_environment(&self) -> Result<Vec<(String, String)>, ActivationError>;
 }
 
@@ -276,9 +197,7 @@ pub struct PackageSpec(/* opaque MatchSpec string */);
 impl PackageSpec {
     /// `pub` — needed by any external caller constructing
     /// `default_override: Option<Vec<PackageSpec>>`, not only by
-    /// `RequestedPackages::from_cli` internally (added to the public
-    /// surface in this revision — the first draft defined this method in
-    /// `data-model.md` but never listed it here or marked it `pub`).
+    /// `RequestedPackages::from_cli` internally.
     pub fn parse(input: &str) -> Result<Self, InvalidPackageSpec>;
 }
 
@@ -286,6 +205,11 @@ pub struct InvalidPackageSpec { pub input: String, pub reason: String }
 
 #[derive(Debug, Clone)]
 pub struct CreationFailure {
+    /// The environment identifier this failed attempt would have used —
+    /// present so a caller/test can correlate this failure with the
+    /// `EphemeralLifecycleEvent`s this attempt still emitted (FR-013),
+    /// even though no `ReadyEnvironment` was ever produced.
+    pub id: EnvironmentId,
     pub error: EphemeralEnvError,
     pub cleanup_error: Option<EphemeralEnvError>,
 }
@@ -329,13 +253,10 @@ signature is unchanged.
 /// exactly. Kept intentionally small so a from-scratch solve+install stays
 /// fast in tests and in real one-shot usage.
 ///
-/// **Illustrative shape, not a pinned literal (corrected in this
-/// revision — an earlier draft stated this exact `&["python", "pip"]`
-/// value as settled, then separately said package names were still
-/// implementation-time-confirmed, which contradicted itself)**: the real
-/// values are pinned by whatever fixture channel this feature's own test
-/// suite provides — the fixture is authoritative for this constant's
-/// contents, not the other way around. `["python", "pip"]` here is only a
+/// **Illustrative shape, not a pinned literal**: the real values are
+/// pinned by whatever fixture channel this feature's own test suite
+/// provides — the fixture is authoritative for this constant's contents,
+/// not the other way around. `["python", "pip"]` here is only a
 /// representative example of the *kind* of small, useful default this
 /// should be, not the literal contract.
 pub const DEFAULT_PACKAGES: &[&str] = &["<fixture-defined>", "..."];
@@ -355,13 +276,7 @@ grant table.
   per-user, per-installation subdirectory of `std::env::temp_dir()` (see
   `research.md` for the exact naming scheme and why plain
   `std::env::temp_dir()` alone is insufficient for FR-008's "same caller"
-  guarantee).
-- **`ALLEZ_ROOT_LOCK_TIMEOUT_MS`** (env var, optional, default `2000`):
-  overrides the bounded wait for the brief root-level lock creation and
-  reclamation both serialize against (see `research.md`'s "named,
-  configurable timeout" decision) — an invalid/unparseable value falls
-  back to the default rather than erroring. Exhausting this timeout is
-  surfaced as `EphemeralEnvError::UnwritableLocation`.
+  scoping).
 - This feature never calls `rattler_cache::default_cache_dir()` or the
   gateway's own default cache dir — every `rattler`-facing path is passed
   explicitly.
@@ -380,42 +295,42 @@ grant table.
   `libcuda.so*` or executes `nvidia-smi`.
 - The package/repodata cache under `$ALLEZ_EPHEMERAL_ROOT` is
   long-lived and shared across every ephemeral environment this
-  installation creates (see `research.md`) — it is not removed on any
-  single environment's teardown, and is not scanned by
-  `reclaim_orphaned_environments()`.
+  installation creates (see `research.md`) — it is not removed by any
+  single environment's rollback or by `reap_ephemeral_environments()`.
 
-## Exit-cleanup contract: `Drop`-only, no signal handler (corrected in this revision)
+## Removal contract: explicit reap only, no automatic teardown
 
-**No signal handler of any kind is installed by this feature, and it has
-no `ctrlc` dependency** — an earlier revision of this contract proposed a
-process-wide `ctrlc::set_handler`-based Ctrl-C handler; that proposal is
-removed entirely, not merely softened, because it never applied in the
-first place: `allez` is invoked by an AI agent operating inside an
-externally-established sandbox (spec Operating Context), never directly
-by a human at a terminal, so there is no human-initiated interrupt (a
-terminal Ctrl-C) for this feature to ever need to catch. The only two
-exit-cleanup mechanisms this feature provides are:
+**There is no automatic removal of a successfully created environment,
+and no signal handler of any kind** — `allez` is invoked by an AI agent
+operating inside an externally-established sandbox (spec Operating
+Context), never directly by a human at a terminal, so there is no
+human-initiated interrupt (a terminal Ctrl-C) for this feature to ever
+need to catch, and there is no exit-time cleanup hook of any kind either.
+This feature provides exactly two removal paths:
 
-1. An RAII `CleanupGuard`'s `Drop` implementation, which best-effort-removes
-   the prefix directory on ordinary Rust scope-unwinding (normal process
-   exit, or an explicit early drop of a live handle).
-2. `reclaim_orphaned_environments()`, run automatically as the first step
-   of every `create_ephemeral_environment` call, which catches anything
-   `Drop` can't (a crash, `SIGKILL`, power loss — none of which run Rust's
-   normal unwind path).
+1. **Creation-failure rollback**: if `create_ephemeral_environment`
+   itself fails (an unresolvable package, a failed integrity check, and
+   so on), it removes whatever partial directory it created for that
+   attempt synchronously, as part of the same call, before returning
+   `Err(CreationFailure)` — reporting a distinct `cleanup_error` if that
+   rollback itself also fails (FR-004/FR-010). This is the *only*
+   automatic removal this feature performs, and it never applies to a
+   *successfully* created environment.
+2. **`reap_ephemeral_environments()`**: the sole way a caller removes one
+   or more *successfully created* environments — see the function
+   documentation above. It has no liveness/in-use detection of any kind.
 
-**Caller obligation: never call `std::process::exit()` with live handles
-outstanding.** `std::process::exit()` (and `abort()`) skip Rust's normal
-unwind/drop sequence entirely, so any live `EphemeralEnvironmentHandle`
-whose teardown hasn't already been awaited at that point will **not** be
-cleaned up by `Drop`; it will only ever be recovered later via
-`reclaim_orphaned_environments()` on a subsequent `create()` call (still
-correct per FR-008's reclamation-deadline fallback, but not "at exit
-time"). Any caller of this API (GEN-25 included) that needs the
-immediate-cleanup guarantee, not just the eventual-reclamation one, MUST
-either await every live handle's teardown before exiting, or avoid
-`std::process::exit()`/`abort()` in favor of returning normally from
-`main()`.
+**Caller obligation**: a successfully created `ReadyEnvironment` persists
+on disk for as long as nothing removes it. Dropping every reference to
+it, letting the owning process exit normally, or the owning process
+being killed abruptly all have exactly the same effect on it: none.
+Reclaiming the disk space an ephemeral environment occupies is entirely
+the caller's own responsibility, taken only by explicitly calling
+`reap_ephemeral_environments()` when the caller itself knows doing so is
+safe. This is a deliberate, temporary simplification, not a permanent
+design point — see `spec.md`'s User Story 2 and `research.md`'s
+"Explicit reap, no automatic reaping" decision; safer, more automatic
+reclamation is expected to be revisited in a future ticket.
 
 ## Open product-direction question (not blocking this plan)
 
@@ -441,4 +356,7 @@ silently becoming stale.
   what must learn to produce it.
 - No private-channel authentication of any kind — GEN-29's entire scope,
   deferred without a placeholder mechanism (see Scope note above).
-</content>
+- No automatic teardown of any kind — safer, more automatic reclamation
+  than the unconditional `reap_ephemeral_environments()` this ticket
+  ships is deliberately deferred to a future ticket (see the Removal
+  contract above).

@@ -1,0 +1,21 @@
+{
+  "info": {
+    "subdir": "noarch"
+  },
+  "packages": {
+    "fixture-priority-2.0.0-0.tar.bz2": {
+      "build": "0",
+      "build_number": 0,
+      "depends": [],
+      "license": "BSD-3-Clause",
+      "md5": "a2dc535a2676514a198f9ef23b77946f",
+      "name": "fixture-priority",
+      "noarch": "generic",
+      "sha256": "88ba27e9c6f214d4d4b662daa667356c3ee426f4c9a807c54ad8028bb44a9a27",
+      "size": 323,
+      "subdir": "noarch",
+      "timestamp": 1704067200000,
+      "version": "2.0.0"
+    }
+  }
+}

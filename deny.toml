@@ -92,9 +92,31 @@ allow = [
     "MIT",
     "Apache-2.0",
     "BSD-3-Clause",
+    "BSD-2-Clause",
     "Unicode-3.0",
     "MIT-0",
     "Zlib",
+    # All five entries below were newly pulled in transitively by GEN-24's
+    # rattler-ecosystem dependencies (T001/T026's `gateway` feature) and
+    # confirmed permissive via `cargo deny check licenses` (T004) -- none
+    # impose share-alike/copyleft obligations on `allez` itself.
+    #
+    # http-cache-semantics, via rattler_repodata_gateway's `gateway`
+    # feature -- a standard OSI-approved permissive license, already
+    # covered by the `BSD-2-Clause` entry above.
+    # aws-lc-rs/aws-lc-sys, via reqwest's `rustls` feature.
+    "ISC",
+    # libbz2-rs-sys (bzip2 decompression), via rattler's archive-extraction
+    # stack -- the classic bzip2 license, OSI-recognized as permissive.
+    "bzip2-1.0.6",
+    # option-ext (a `dirs-sys` dependency) -- MPL-2.0 is weak/file-level
+    # copyleft: it only obligates sharing modifications to MPL-licensed
+    # files themselves, not the rest of this crate; no vendored/modified
+    # copy of this file exists in this repo.
+    "MPL-2.0",
+    # webpki-root-certs -- a permissive data license covering only
+    # Mozilla's bundled root-certificate data, not source code.
+    "CDLA-Permissive-2.0",
 ]
 # The confidence threshold for detecting a license from license text.
 # The higher the value, the more closely the license text must be to the

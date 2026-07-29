@@ -1,0 +1,92 @@
+use std::collections::BTreeSet;
+
+use allez::ephemeral::{
+    ChannelPriorityMode, DEFAULT_PACKAGES, RequestedPackages, create_ephemeral_environment,
+};
+
+use crate::support::{TestContext, package_specs, root_fixture_config};
+
+fn installed_names(ready: &allez::ephemeral::ReadyEnvironment) -> BTreeSet<&str> {
+    ready
+        .installed_packages
+        .iter()
+        .map(|package| package.name.as_str())
+        .collect()
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[serial_test::serial]
+async fn no_packages_with_an_override_installs_the_override_instead_of_defaults() {
+    // Given
+    let _context = TestContext::new("override-instead-of-defaults");
+    let RequestedPackages::Explicit(override_packages) = package_specs(&["fixture-default-beta"])
+    else {
+        unreachable!("package_specs always returns Explicit")
+    };
+
+    // When
+    let ready = create_ephemeral_environment(
+        RequestedPackages::UseDefaultOrOverride,
+        root_fixture_config(ChannelPriorityMode::Strict),
+        Some(override_packages),
+    )
+    .await_ready()
+    .await
+    .unwrap();
+
+    // Then
+    assert_eq!(
+        installed_names(&ready),
+        BTreeSet::from(["fixture-default-beta"])
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[serial_test::serial]
+async fn explicit_packages_alongside_an_override_ignore_the_override_entirely() {
+    // Given
+    let _context = TestContext::new("explicit-wins-over-override");
+    let RequestedPackages::Explicit(override_packages) = package_specs(&["fixture-default-beta"])
+    else {
+        unreachable!("package_specs always returns Explicit")
+    };
+
+    // When
+    let ready = create_ephemeral_environment(
+        package_specs(&["fixture-default-alpha"]),
+        root_fixture_config(ChannelPriorityMode::Strict),
+        Some(override_packages),
+    )
+    .await_ready()
+    .await
+    .unwrap();
+
+    // Then
+    assert_eq!(
+        installed_names(&ready),
+        BTreeSet::from(["fixture-default-alpha"])
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[serial_test::serial]
+async fn an_override_resolving_to_empty_falls_back_to_default_packages() {
+    // Given
+    let _context = TestContext::new("empty-override-falls-back");
+
+    // When
+    let ready = create_ephemeral_environment(
+        RequestedPackages::UseDefaultOrOverride,
+        root_fixture_config(ChannelPriorityMode::Strict),
+        Some(Vec::new()),
+    )
+    .await_ready()
+    .await
+    .unwrap();
+
+    // Then
+    assert_eq!(
+        installed_names(&ready),
+        DEFAULT_PACKAGES.iter().copied().collect()
+    );
+}

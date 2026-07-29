@@ -1,16 +1,9 @@
-#![warn(missing_docs)]
-#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
-
 //! `allez` CLI entry point.
-
-mod cli;
-mod error;
-mod observability;
-mod output;
 
 use clap::Parser;
 use clap::error::ErrorKind;
 
+use allez::{cli, error, observability, output};
 use cli::{Cli, Commands};
 use error::AllezError;
 

@@ -4,10 +4,11 @@
 //!
 //! **Teardown is explicit, not automatic.** An environment this module
 //! successfully creates stays on disk, usable, until a caller later calls
-//! [`reap_ephemeral_environments`] — there is no per-environment RAII
-//! cleanup guard, no lock-file-based liveness tracking, and no automatic
-//! orphan reclamation any more. See the spec's "Explicit reap, no
-//! automatic reaping" decision for the full rationale.
+//! [`crate::ephemeral::reap_ephemeral_environments`] — there is no
+//! per-environment RAII cleanup guard, no lock-file-based liveness
+//! tracking, and no automatic orphan reclamation any more. See the
+//! spec's "Explicit reap, no automatic reaping" decision for the full
+//! rationale.
 
 use std::time::Instant;
 

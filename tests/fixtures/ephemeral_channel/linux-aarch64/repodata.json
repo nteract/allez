@@ -1,0 +1,22 @@
+{
+  "info": {
+    "subdir": "linux-aarch64"
+  },
+  "packages": {
+    "fixture-probe-1.0.0-0.tar.bz2": {
+      "arch": "aarch64",
+      "build": "0",
+      "build_number": 0,
+      "depends": [],
+      "license": "BSD-3-Clause",
+      "md5": "ae81cde04f97b09d0394d5bf81d82536",
+      "name": "fixture-probe",
+      "platform": "linux",
+      "sha256": "fd45f942791436be90098f46302770993d091adca19c75929a6f34b6cf169caf",
+      "size": 496,
+      "subdir": "linux-aarch64",
+      "timestamp": 1704067200000,
+      "version": "1.0.0"
+    }
+  }
+}

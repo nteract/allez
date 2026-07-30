@@ -18,29 +18,54 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --all --locked
 
-  cross-compile-check:
-    name: cargo check --target aarch64-unknown-linux-gnu
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-unknown-linux-gnu
-      - run: cargo check --locked --target aarch64-unknown-linux-gnu
-
   doc:
-    name: cargo doc (condarc)
+    name: cargo doc (allez, condarc)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: make doc
+
+  deny:
+    name: cargo deny check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  coverage:
+    name: cargo llvm-cov (fail-under-lines)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      # 85% is a fixed floor set against this branch's own current baseline
+      # (94.89% line coverage measured locally pre-GEN-24), not a "no
+      # decrease from the previous commit" diff -- see T005/tasks.md for
+      # why a floor is this task's deliberate, documented simplification.
+      # Revisit this number at T056/T058 once the full `ephemeral/` module
+      # (including its Windows-only/`#[cfg(windows)]` paths this Linux job
+      # can't itself exercise) has landed and real coverage is measured.
+      - run: cargo llvm-cov --all --locked --fail-under-lines 85
 
   conformance:
     name: condarc conformance tests

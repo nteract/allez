@@ -3,11 +3,17 @@ use std::ffi::{OsStr, OsString};
 
 use crate::error::AllezError;
 
+/// `allez create` subcommand.
 pub mod create;
+/// `allez list` subcommand.
 pub mod list;
+/// `allez oneshot` subcommand.
 pub mod oneshot;
+/// `allez remove` subcommand.
 pub mod remove;
+/// `allez run` subcommand.
 pub mod run;
+/// `allez sandbox` subcommand.
 pub mod sandbox;
 
 /// Rejects an empty path; returns it unchanged otherwise.
@@ -128,7 +134,9 @@ pub enum Commands {
 
 impl Commands {
     /// This subcommand's name, used as the `operation` field on
-    /// [`crate::dispatch`]'s `tracing` events.
+    /// `main.rs`'s `dispatch` function's `tracing` events (not an
+    /// intra-doc link: `dispatch` lives in the `allez` binary target, not
+    /// this library target, so `rustdoc` cannot resolve it from here).
     pub fn name(&self) -> &'static str {
         match self {
             Self::Oneshot(_) => "oneshot",

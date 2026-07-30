@@ -12,15 +12,16 @@ help: ## Show this help
 test: ## Run the full cargo test suite
 	cargo test --all
 
-# Scoped to `-p condarc --lib` rather than `--workspace`: the root `allez`
-# package is a bin-only crate (no lib.rs), so `cargo doc --workspace` mostly
-# just re-documents condarc anyway while adding noise (and a --no-deps run
-# would still try, and fail, to build docs for `allez`'s own dependency
-# graph). Targeting the condarc lib directly checks exactly what we care
-# about: that condarc's public API docs build cleanly. Mirrored by the `doc`
-# job in .github/workflows/ci.yml -- keep both in sync.
-doc: ## Build condarc's public API docs, failing on any rustdoc warning (e.g. broken intra-doc links)
-	RUSTDOCFLAGS='-D warnings' cargo doc -p condarc --lib --no-deps --locked
+# Scoped to `-p condarc --lib -p allez --lib` rather than `--workspace`:
+# `--workspace` would also try (and fail, for unrelated reasons) to build
+# docs for `allez`'s `[[bin]]` target and its own dependency graph. Since
+# GEN-24 added `src/lib.rs`, `allez` now has a real public library API
+# (`allez::ephemeral::*`) that needs the same rustdoc gate condarc's
+# already had -- T002's `#![warn(missing_docs)]` on `src/lib.rs` is
+# otherwise unenforced by CI. Mirrored by the `doc` job in
+# .github/workflows/ci.yml -- keep both in sync.
+doc: ## Build allez's and condarc's public API docs, failing on any rustdoc warning (e.g. missing docs, broken intra-doc links)
+	RUSTDOCFLAGS='-D warnings' cargo doc -p condarc -p allez --lib --no-deps --locked
 
 # rstest's #[files(...)] attribute globs conformance/condarc/{valid,invalid}
 # at compile time (inside the proc-macro expansion), so cargo has no way to

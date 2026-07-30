@@ -1,0 +1,49 @@
+{
+  "info": {
+    "subdir": "noarch"
+  },
+  "packages": {
+    "fixture-corrupt-checksum-1.0.0-0.tar.bz2": {
+      "build": "0",
+      "build_number": 0,
+      "depends": [],
+      "license": "BSD-3-Clause",
+      "md5": "00000000000000000000000000000000",
+      "name": "fixture-corrupt-checksum",
+      "noarch": "generic",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "size": 337,
+      "subdir": "noarch",
+      "timestamp": 1704067200000,
+      "version": "1.0.0"
+    },
+    "fixture-default-alpha-1.0.0-0.tar.bz2": {
+      "build": "0",
+      "build_number": 0,
+      "depends": [],
+      "license": "BSD-3-Clause",
+      "md5": "54bf1e7455e96f270ad99c2352220622",
+      "name": "fixture-default-alpha",
+      "noarch": "generic",
+      "sha256": "1f592b3893cb3968a81edb2d8fc15bcd758c39c9c550b3a6ce939f474db1c96b",
+      "size": 329,
+      "subdir": "noarch",
+      "timestamp": 1704067200000,
+      "version": "1.0.0"
+    },
+    "fixture-default-beta-1.0.0-0.tar.bz2": {
+      "build": "0",
+      "build_number": 0,
+      "depends": [],
+      "license": "BSD-3-Clause",
+      "md5": "d3d87f9511227371f463614f2f248df5",
+      "name": "fixture-default-beta",
+      "noarch": "generic",
+      "sha256": "617063bb4883744195dedbf616e2f4428dc1300b0590ce19fc8fd3585ec43a7a",
+      "size": 324,
+      "subdir": "noarch",
+      "timestamp": 1704067200000,
+      "version": "1.0.0"
+    }
+  }
+}

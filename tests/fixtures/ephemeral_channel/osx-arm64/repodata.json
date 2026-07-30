@@ -1,0 +1,22 @@
+{
+  "info": {
+    "subdir": "osx-arm64"
+  },
+  "packages": {
+    "fixture-probe-1.0.0-0.tar.bz2": {
+      "arch": "aarch64",
+      "build": "0",
+      "build_number": 0,
+      "depends": [],
+      "license": "BSD-3-Clause",
+      "md5": "67e49b2386dc53ee1074542a98aa7788",
+      "name": "fixture-probe",
+      "platform": "osx",
+      "sha256": "388edfacf8830a3de88b62b8d98bf1446b43b488cd685b55a2cd5817f5188f33",
+      "size": 499,
+      "subdir": "osx-arm64",
+      "timestamp": 1704067200000,
+      "version": "1.0.0"
+    }
+  }
+}

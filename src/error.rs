@@ -2,6 +2,22 @@
 
 use std::fmt;
 
+/// Implemented by every fixed error-category enum in this crate
+/// (`AllezError`, `ephemeral::EphemeralEnvError`, ...) so
+/// `output::render_error` has exactly one rendering path regardless of
+/// which subsystem raised the error.
+pub trait CategorizedError: std::error::Error {
+    /// The category string for this error, per whichever fixed set the
+    /// implementing type defines.
+    fn category(&self) -> &'static str;
+}
+
+impl CategorizedError for AllezError {
+    fn category(&self) -> &'static str {
+        AllezError::category(self)
+    }
+}
+
 /// Every variant maps to exactly one category via [`AllezError::category`],
 /// so there is no second, hand-maintained list of category strings that can
 /// drift out of sync with the type.

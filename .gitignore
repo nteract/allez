@@ -23,8 +23,8 @@ target
 # Spec Kit and AI
 .omo/
 /specs/*/checklists/
-/specs/*/context.md
-/specs/*/research
+/specs/*/context-summary.md
+/specs/*/context-files/
 /.specify/feature.json
 
 

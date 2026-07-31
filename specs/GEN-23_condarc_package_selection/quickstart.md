@@ -9,67 +9,23 @@ artifact (`tasks.md`, produced by `/speckit.tasks`).
 ## Prerequisites
 
 - Rust toolchain matching the workspace's `edition = "2024"`.
-- No network access required for any test this feature adds — `resolve()`
-  is a pure, hermetic function (research.md R1/R4) and `allez`'s own
-  file-handling layer only ever reads a local path. Unlike
-  `condarc_conformance`/`network-tests`, there is no opt-in feature flag
-  to enable for this feature's own tests; `cargo test --all` runs
-  everything.
-- The one test that exercises the real, zero-argument
-  `allez::channel_config::resolve_channel_config()` public entry point
-  does so **out of process**: it re-executes **the test binary itself**
-  — the already-compiled executable `std::env::current_exe()` points at,
-  guaranteed to exist because it is the binary currently running — as a
-  child process, with `HOME` set on that child's own `Command`
-  environment, pointing at a `tempfile::tempdir()` that contains a known
-  `.condarc`, and asserts on the child's stdout. Because a child process
-  inherits its environment at creation time rather than sharing it, this
-  test needs no test-ordering attribute, no `unsafe` block, and no
-  mutation of the test binary's own environment — there is no
-  process-wide environment race to isolate against in the first place
-  (research.md R10). The spawning mechanism is settled and needs no
-  manifest change at all: which of the two branches the process takes is
-  selected by a dedicated marker environment variable set only on the
-  child (`__CHANNEL_CONFIG_SMOKE_CHILD=1`, a name no production code ever
-  reads). Unset (the ordinary `cargo test` invocation), the test spawns
-  the child and asserts; set (the spawned process, which is the same test
-  binary reaching the same test function again), it instead calls
-  `resolve_channel_config()` directly and prints a well-defined result to
-  stdout wrapped in two unique sentinel markers, then **returns
-  normally** as an ordinary passing test — it does not call
-  `std::process::exit()`, which would terminate the whole
-  multi-threaded test process and could leave other concurrently-running
-  test threads reported as killed rather than completing. The parent also
-  passes three CLI arguments to the re-executed binary: that test
-  function's own libtest name, `--exact`, and `--nocapture`. The first
-  two restrict the child to running only this one test (a libtest harness
-  selects tests from its command line, not from the environment, so
-  without them the child would re-run every test in this binary under the
-  redirected `HOME`); `--nocapture` is what lets the child's `println!`
-  output actually reach the parent's captured stdout, since libtest
-  otherwise captures a test's stdout internally and releases it only when
-  that test fails. The parent asserts the child's exit status was
-  successful first, then extracts and compares only the
-  sentinel-delimited region, ignoring libtest's own `running 1
-  test`/`test result: ok.` lines in that same stdout. Since the spawned
-  path is an already-built executable rather than a fresh `cargo`
-  invocation, no `cargo` process ever runs under a redirected `HOME`, so
-  Cargo's own toolchain/registry discovery is unaffected — and this adds
-  zero new Cargo dependencies and no manifest-declared `[[bin]]` target
-  (the one thing a prior round's fix specifically removed);
-  `examples/channel_config_smoke.rs` remains exactly the plain,
-  Cargo-auto-discovered example already planned for this ticket from the
-  start (its own manual-smoke-test purpose, below) — an existing planned
-  target, not a new one introduced by this test-mechanism decision.
-  `std::process::Command` plus `std::env::current_exe()` is the whole
-  mechanism (research.md R10).
-  That same test is `#[cfg(unix)]`-gated
-  for one unrelated reason only: Windows's `dirs::home_dir()` resolves via
-  `SHGetKnownFolderPath` and does not consult `USERPROFILE` at all, so no
-  environment value — in this process or a child's — would redirect it
-  (research.md R10). Every other test in this
-  feature drives the path-injectable internal function instead and needs
-  no isolation of any kind.
+- No network access required for any test this feature adds —
+  `expand_channels()` is a pure, hermetic function (research.md R1/R4)
+  and `allez`'s file-handling layer only reads a local path when one is
+  explicitly given. Unlike `condarc_conformance`/`network-tests`, there's
+  no opt-in feature flag; `cargo test --all` runs everything automated.
+- There is deliberately no automated test of the real, zero-argument
+  `allez::channel_config::resolve_channel_config()` entry point: reading
+  whatever `.condarc` exists on the test machine would be
+  non-deterministic (Constitution II) and risks the crate's own
+  documented stack-depth-guard gap against an unknown real file (spec.md
+  Known Limitations). Its only coverage is the manual, optional
+  `examples/channel_config_smoke.rs` (below), run deliberately by a
+  developer, never by `cargo test` (research.md R8). Every automated
+  `allez`-level test drives the path-injectable internal function or the
+  private `adapt()` function instead, using `tempfile` fixtures; the
+  crate-level `expand_channels()` tests (SC-003) call `expand_channels()`
+  directly, a third path touching neither entry point's file handling.
 
 ## Setup
 
@@ -77,13 +33,13 @@ artifact (`tasks.md`, produced by `/speckit.tasks`).
 cargo build --all
 ```
 
-No environment variables are required to exercise either public function
-directly. `crates/condarc`'s `resolve()` needs nothing beyond an
-in-memory `Config` (construct one via `condarc::parse(...)`, or use
-`Config::default()` for the "nothing configured" case).
-`allez::channel_config::resolve_channel_config()` needs nothing beyond a
-resolvable home directory — which every development/CI machine already
-has.
+No environment variables are required to exercise either public
+function directly. `crates/condarc`'s `expand_channels()` needs nothing
+beyond an in-memory `Config` (construct one via `condarc::parse(...)`,
+or use `Config::default()` for the "nothing configured" case).
+`allez::channel_config::resolve_channel_config()` handles the resolvable
+and the undeterminable home-directory case identically (FR-009) — no
+setup is needed either way.
 
 ## Run the full test suite
 
@@ -96,146 +52,188 @@ This must include, at minimum, one test per acceptance scenario in
 names are decided during task breakdown; the mapping below is
 non-exhaustive but covers every `SC-00n` this ticket's spec defines.
 
-### `crates/condarc` (`resolve()`, User Stories 1 and 3)
+## Quality gates
 
-- **SC-003's 20 named scenarios** — one test per row, each asserting the
+The same gates Constitution's own Quality Gates section requires for
+every change, run against this ticket's one changed manifest
+(root `Cargo.toml`, gaining `dirs` and promoting `condarc`) and new
+source files:
+
+```sh
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo audit
+cargo deny check
+cargo doc --no-deps
+```
+
+`cargo audit`/`cargo deny check` apply even though `dirs` is only
+promoted from transitive to direct (no new package enters the resolved
+graph) — the gate runs on every manifest change, not only ones that add
+a new dependency. `cargo test --all` above already covers all four
+target platforms per the workspace's own CI matrix.
+
+### `crates/condarc` (`expand_channels()`, User Stories 1 and 3)
+
+- **SC-003's 22 named scenarios** — one test per row, each asserting the
   exact resolved value for that specific `.condarc` shape (bare-name
   resolution via each of the four FR-001 precedence branches; all four
   `defaults`-substitution triggers — explicit `[defaults]`, absent,
   explicit `null`, explicit `[]`; a user-configured, non-built-in
-  `default_channels` value actually substituting; all four
-  `channel_priority` modes including the two legacy boolean spellings and
-  the absent-defaults-to-`flexible` case; allow/deny entries requiring
-  FR-001 expansion; both alias-collision malformed-input cases — proven
-  by asserting `condarc::parse` itself returns `Err`, since `resolve()`
-  never runs on that input at all, research.md R3).
+  `default_channels` value actually substituting; all three
+  `channel_priority` modes, the absent-defaults-to-`flexible` case, and
+  the two legacy boolean spellings; a `denylist_channels`/`allowlist_channels`
+  entry requiring FR-001 expansion before it matches and
+  removes/retains the corresponding `channels` entry, per FR-019; both
+  alias-collision malformed-input cases — proven by asserting
+  `condarc::parse` itself returns `Err`, since `expand_channels()` never
+  runs on that input, research.md R3; a `channel_alias` with a trailing
+  slash, asserting exactly one slash in the joined result; and a
+  dot-containing bare name that doesn't match FR-001(a)'s scheme
+  pattern, asserting it still resolves via `channel_alias`).
+- **SC-005** — a `.condarc` resolving a channel-list entry through an
+  effective, explicit empty-string `channel_alias` asserts
+  `expand_channels()` returns `Err(ExpandChannelsError::EmptyChannelAlias { entry })`
+  with the exact triggering entry (FR-018, research.md R11).
 - **User Story 1 Acceptance Scenario 5** — a `custom_multichannels`
   member naming another multichannel, a `custom_channels` entry, or the
   multichannel being defined itself → resolved as an ordinary bare name
   via `channel_alias`, proving `resolve_member`'s restricted precedence
-  (research.md R5) rather than a full recursive expansion.
+  (research.md R5) rather than full recursive expansion.
 - **`custom_channels` progressive-prefix match** — `custom_channels:
   {acme: "https://internal.example.com"}`, entry `"acme/label/dev"` →
   `"https://internal.example.com/acme/label/dev"` (research.md R6's
-  worked example, mirroring `docs/condarc_research.md`'s own
-  `pkgs/pro` pairing).
-- **SC-005's 6 credential-bearing-location scenarios** — a
-  credential-bearing entry in `channel_alias`, `custom_channels`,
-  `default_channels`, a `custom_multichannels` member, directly in a
-  fully-qualified `channels` URL, and in an `allowlist_channels`/
-  `denylist_channels` entry → each resolves with credentials stripped
-  from the output *and* produces exactly one matching
-  `CredentialStrippingEvent` (correct `role`/`index`).
-- **FR-007** — a `.condarc` setting `override_channels_enabled` (either
-  value) has zero effect on the resolved output (assert `resolve()`'s
-  output is identical with and without that key set).
-- **FR-008** — two different bare names that happen to expand to the
-  same concrete URL both survive in `channels`, uncollapsed.
-- **FR-009** — a `.condarc` setting `channel_settings` never causes any
-  entry to appear in any of `ResolvedChannels`'s three lists, and the
-  setting itself is never read.
-- **User Story 3 Acceptance Scenarios 1/2/5/6** — `channel_priority`
+  worked example, mirroring `docs/condarc_research.md`'s own `pkgs/pro`
+  pairing).
+- **FR-006** — a `.condarc` setting `override_channels_enabled` (either
+  value) has zero effect on the resolved output.
+- **FR-007** — two different bare names that happen to expand to the
+  same concrete URL both survive in `channels`, uncollapsed. Since
+  FR-019's filtering matches by identifier value, this pair either both
+  survive or both get removed together — never just one.
+- **FR-008** — a `.condarc` setting `channel_settings` never causes any
+  entry to appear in `ResolvedChannels.channels`, and the setting itself
+  is never read.
+- **User Story 3 Acceptance Scenarios 1/2/5** — `channel_priority`
   already-coerced-by-`parse()` passthrough for all three modes, the
   absent-defaults-to-`Flexible` case, and the two legacy boolean
-  spellings, confirming `resolve()` performs no re-coercion of its own
-  (research.md R2).
+  spellings, confirming `expand_channels()` performs no re-coercion of
+  its own (research.md R2).
+- **User Story 3 Acceptance Scenario 3** — a `.condarc` setting both
+  `allowlist_channels` and `denylist_channels`, including one channel
+  present in both, asserting the resulting `channels` has every denied
+  entry removed (checked first) and every entry not in a non-empty
+  allow-list removed too, with the both-lists entry specifically absent
+  (FR-004/FR-019 — deny wins on conflict, see spec.md's Edge Cases and
+  Design Decisions).
 - **`Config::default()` (the empty-document case)** — resolves to
   `channels: [<the three/two built-in DEFAULT_CHANNELS URLs>]`,
-  `channel_priority: Flexible`, both allow/deny lists empty, no
-  credential-stripping events — this is exactly what `allez`'s own
-  FR-010/FR-012 fallback path relies on producing.
+  `channel_priority: Flexible` — exactly what `allez`'s own
+  FR-009/FR-011 fallback path relies on producing, and confirms
+  `expand_channels(&Config::default())` cannot reach the
+  `EmptyChannelAlias` `Err` branch (`channel_alias` defaults to the
+  non-empty built-in alias, FR-002).
 
-### `allez` (`resolve_channel_config`, User Story 2, SC-001/SC-002/SC-004)
+### `allez` (`resolve_channel_config`, User Story 2, SC-001/SC-002/SC-004/SC-005/SC-006/SC-007)
 
-- **SC-002's four file-state cases** — missing, crate-rejected,
-  unreadable (a file written with **invalid UTF-8 bytes**:
-  `std::fs::read_to_string` requires valid UTF-8 and so fails
-  deterministically with `io::ErrorKind::InvalidData` on every target
-  platform, exercising the same `ReadOutcome::Unreadable(io::Error)`
-  branch a real permission denial would, with no `chmod`, no Windows ACL
-  manipulation, and no `cfg`-gating — research.md R10; a real
-  permission-denied file is the illustrative production case that branch
-  exists for, not the mechanism this test uses, deliberately, since Unix
-  permission bits are bypassed entirely under `root` and root-run CI
-  would silently no-op such a fixture into the success path —
-  research.md R10), and populated — each via
-  `resolve_channel_config_from(Some(path))`/`None`, asserting a valid,
+- **FR-010** — satisfied by construction, not a dedicated test: every
+  test in this section exercises the real `condarc::parse` and real
+  `condarc::expand_channels`, never a private reimplementation of either
+  — SC-002/SC-004/SC-005/SC-006 via `resolve_channel_config_from`,
+  SC-001 via a direct `expand_channels()` + `adapt()` call
+  (contracts/allez_channel_config_api.md's own file-state table names
+  both calls explicitly). No separate assertion needed beyond what those
+  already exercise end-to-end.
+- **SC-002's five file-state cases, plus one argument-level case (six tests total)** — missing, crate-rejected,
+  unreadable (a file written with invalid UTF-8 bytes: `read_to_string`
+  fails deterministically with `io::ErrorKind::InvalidData` on every
+  target platform, exercising the same `ReadOutcome::Unreadable(io::Error)`
+  branch a real permission denial would, with no `chmod`, ACL
+  manipulation, or `cfg`-gating — research.md R8; a real
+  permission-denied file is the illustrative production case, not the
+  test mechanism, since Unix permission bits are bypassed under `root`
+  and root-run CI would silently no-op such a fixture into the success
+  path), one triggering `condarc::expand_channels()`'s own `Err`
+  (FR-018, see SC-005 below), and populated — each via
+  `resolve_channel_config_from(Some(path))`/`None`, asserting
+  `ChannelConfigResolution::Ready { config, fallback }` with a valid,
   fully-populated `ChannelConfig` in every case (User Story 2 Scenarios
-  1–4), and asserting `ChannelConfigResolution.fallback`'s exact value
-  for each — `None`, `Some(Rejected)`, `Some(Unreadable)`, `None`
-  respectively (FR-019) — plus `resolve_channel_config_from(None)` (the
-  home-directory-undeterminable case) exercised as its own distinct test
-  case rather than folded into the general "missing" description, since
-  `data-model.md`'s own doc comment on `resolve_channel_config_from`
-  specifically distinguishes `path: None` from
+  1–3, plus the populated/happy-path case — Scenario 4 is the separate
+  never-mutates guarantee, covered by its own FR-013 bullet below), and
+  asserting `fallback`'s exact value for each — `None`, `Some(Rejected)`,
+  `Some(Unreadable)`, `Some(Rejected)`, `None` respectively (FR-017, the
+  expansion-failure case sharing `Rejected` per research.md R11) — plus
+  `resolve_channel_config_from(None)` (the home-directory-undeterminable
+  case) exercised as its own distinct test case, since `data-model.md`'s
+  own doc comment specifically distinguishes `path: None` from
   `Some(<nonexistent path>)` even though both take the same silent
-  fallback path (FR-010).
-- **SC-001** — a dedicated contract test constructing
-  `allez::ephemeral::ChannelConfig` directly from `condarc::resolve`'s
-  output for at least 5 distinct, real-world-shaped `.condarc` samples
-  (e.g. a plain `channels: [conda-forge, defaults]`; one exercising
-  `custom_channels`+`custom_multichannels` together; one setting
-  `allowlist_channels`/`denylist_channels`; one with credential-bearing
-  entries; one relying purely on defaults), confirming the field-by-field
-  mapping (FR-014) produces the exact same `ChannelConfig` a hand-written
-  expected value would.
-- **SC-004** — one test per fallback path (rejected, unreadable)
+  fallback path (FR-009).
+- **SC-001** — a co-located `#[cfg(test)]` unit test inside
+  `src/channel_config/adapt.rs`, calling the private `adapt()` function
+  directly (not a `tests/` integration test, since `adapt()` isn't
+  `pub` — research.md R8), for at least 5 distinct, real-world-shaped
+  `.condarc` samples (e.g. a plain `channels: [conda-forge, defaults]`;
+  one exercising `custom_channels`+`custom_multichannels` together; one
+  setting `allowlist_channels`/`denylist_channels`; one with
+  `channel_priority` set via a legacy boolean spelling; one relying
+  purely on defaults), confirming `adapt()`'s field-by-field mapping
+  (FR-012) produces the exact same `ChannelConfig` a hand-written
+  expected value would — the expected value's own
+  `allowed_channels`/`denied_channels` always `Vec::new()`, since
+  `ResolvedChannels` no longer carries those as separate fields
+  (FR-019, research.md R12).
+- **SC-004** — one test per fallback path (a `parse()` rejection, an
+  `expand_channels()` failure per FR-018, and an unreadable file)
   asserting a `ChannelConfigFallbackEvent` is actually emitted (captured
-  via a `tracing` test subscriber, the same technique GEN-24's own
+  via a per-test-scoped `tracing::subscriber::with_default`, never a
+  process-global subscriber, so this stays independent of every other
+  test running in parallel — the same technique GEN-24's
   `quickstart.md` describes for `EphemeralLifecycleEvent`), carrying the
-  crate's own per-problem detail for the rejected case and a distinct
-  signal for the unreadable case — and that **zero** such events are
-  emitted for the silent missing-file case (FR-010). These run as
-  co-located `#[cfg(test)]` unit tests in `src/channel_config/`, driven
-  through `resolve_channel_config_from(Some(path))`, not as integration
-  tests — that function is `pub(crate)` and a `tests/` file compiles as a
-  separate crate that cannot call it (research.md R10).
-- **FR-013** — one test per credential-bearing location, mirroring the
-  crate-level SC-005 bullet's own 6 cases but now asserted at the `allez`
-  boundary too: a credential-bearing entry in `channel_alias`, in
-  `custom_channels`, in `default_channels`, in a `custom_multichannels`
-  member, directly in a fully-qualified `channels` URL, and in an
-  `allowlist_channels`/`denylist_channels` entry — each exercised through
-  the full `allez` pipeline (read → parse → resolve → adapt), asserting
-  both that the returned `ChannelConfig` contains no raw credential
-  material *and* that exactly one matching `CredentialStripLogRecord`
-  (correct `role`/`index`) was emitted. Plus: never emits one for the
-  rejected/unreadable fallback path (since `condarc::resolve` never runs
-  there). Like the SC-004 bullet above, these run as co-located
-  `#[cfg(test)]` unit tests in `src/channel_config/` via
-  `resolve_channel_config_from`, for the same `pub(crate)`-visibility
-  reason (research.md R10).
-- **FR-015** — after any `resolve_channel_config_from` call against a
-  real file (any of the four SC-002 states), the file's own modification
+  crate's own per-problem detail for each rejected-equivalent case
+  (`ValidationReport`'s or `ExpandChannelsError`'s own `Display` text)
+  and a distinct signal for the unreadable case — and that **zero** such
+  events are emitted for the silent missing-file case (FR-009). These
+  run as co-located `#[cfg(test)]` unit tests in `src/channel_config/`,
+  driven through `resolve_channel_config_from(Some(path))`, not as
+  integration tests, since that function is `pub(crate)` (research.md
+  R8).
+- **SC-005** — an `allez`-level counterpart to the crate-level SC-005
+  test above: a `.condarc` triggering `expand_channels()`'s
+  `EmptyChannelAlias` `Err` asserts `resolve_channel_config_from` falls
+  back exactly like a `parse()`-rejected file —
+  `ChannelConfigResolution::Ready { fallback: Some(FallbackReason::Rejected), .. }`,
+  with `ChannelConfigFallbackEvent.detail` carrying the
+  `ExpandChannelsError`'s own `Display` text.
+- **SC-006** — a `.condarc` whose `channels` is non-empty before
+  filtering but whose `allowlist_channels`/`denylist_channels` remove
+  every entry (FR-019) asserts `resolve_channel_config_from` returns
+  `ChannelConfigResolution::NoChannels` — not `Ready` with an empty
+  `ChannelConfig` — proving `allez`'s own layer catches this before
+  GEN-24's `channels_with_fallback` ever could (FR-020, research.md
+  R13).
+- **SC-007** — a `.condarc` whose crate-rejected/unreadable content
+  itself contains a URL userinfo segment or an access-token path
+  segment (including a case with two such URLs embedded in the same
+  detail text) asserts the emitted `ChannelConfigFallbackEvent.detail`
+  no longer contains either (FR-021); a separate case supplies a detail
+  text longer than `MAX_FALLBACK_DETAIL_LEN` (2048 bytes) and asserts
+  the emitted value is truncated to it, at a valid UTF-8 boundary. Both
+  are co-located unit tests in `src/channel_config/events.rs`, calling
+  `redact_and_bound` directly and, separately, asserting the same
+  property end-to-end through `resolve_channel_config_from`'s own
+  per-test-scoped `tracing::subscriber::with_default` capture.
+- **FR-013** — after any `resolve_channel_config_from` call against a
+  real file (each of SC-002's four file-exists states: populated,
+  rejected, unreadable, expansion-failing), the file's own modification
   time and contents are unchanged.
-- **FR-016** — a `.condarc` containing an unrecognized, unrelated
+- **FR-014** — a `.condarc` containing an unrecognized, unrelated
   top-level key resolves exactly as if that key were absent (inherited
-  from the crate's own unknown-key tolerance; `Config::extra` is simply
-  never consulted by `resolve()`).
-- **FR-017** — two consecutive calls to `resolve_channel_config_from`
-  against the *same* path, where the file's contents change between
-  calls, produce two *different* results, proving no caching occurs.
-- **The real, zero-argument public entry point** — one subprocess-based
-  test (see Prerequisites above) that re-executes the test binary itself
-  via `std::env::current_exe()`, with `HOME` set on the child's own
-  environment to a fresh `tempfile::tempdir()` containing a known
-  `.condarc` plus the marker environment variable that makes the child
-  call `resolve_channel_config()` with no arguments and print its result
-  wrapped in unique sentinel markers, and with that test function's own
-  libtest name, `--exact`, and `--nocapture` passed as CLI arguments so
-  the child runs only this one test and its printed result actually
-  reaches the parent's captured stdout. The child returns normally rather
-  than calling `std::process::exit()`, and the parent asserts the child's
-  exit status was successful *before* extracting the sentinel-delimited
-  region — then asserts that extracted
-  output (channel list, `channel_priority`, allow/deny sizes, and
-  the FR-019 fallback line if any) matches a **hand-derived expected
-  output** for that one known fixture, hard-coded in the test the same way
-  the SC-001 and SC-003 bullets above hard-code theirs. The test does not
-  call `resolve_channel_config_from` to compute that expectation — that
-  function is `pub(crate)` and unreachable from a `tests/` file, which
-  Rust compiles as a separate crate (research.md R10). This is the one
-  proof that `dirs::home_dir()` resolution itself is wired correctly.
+  from the crate's own unknown-key tolerance; `Config::extra` is never
+  consulted by `expand_channels()`).
+- **FR-015** — two consecutive calls to `resolve_channel_config_from`
+  against the same path, where the file's contents change between
+  calls, produce two different results, proving no caching occurs.
+
 
 ## Manual smoke test (optional, illustrative)
 
@@ -245,17 +243,31 @@ the machine running it:
 
 ```rust
 fn main() {
-    let resolution = allez::channel_config::resolve_channel_config();
-    if let Some(reason) = resolution.fallback {
-        println!("fell back due to: {reason:?}"); // FR-019 — visible without reading logs
+    match allez::channel_config::resolve_channel_config() {
+        allez::channel_config::ChannelConfigResolution::Ready { config, fallback, .. } => {
+            if let Some(reason) = fallback {
+                println!("fell back due to: {reason:?}"); // FR-017 — visible without reading logs
+            }
+            println!("channel_priority: {:?}", config.channel_priority);
+            println!("channels:");
+            for channel in &config.channels {
+                println!("  {channel:?}"); // ChannelSpec's own Debug already redacts credentials
+            }
+            // allowed_channels/denied_channels are always empty here — FR-019
+            // already applied that filtering inside expand_channels() itself.
+        }
+        allez::channel_config::ChannelConfigResolution::NoChannels => {
+            // FR-020 — a fully successful resolution whose allow/deny
+            // filtering removed every channel; never printed as an empty list.
+            println!("no usable channels after allow/deny filtering");
+        }
+        // `ChannelConfigResolution` is `#[non_exhaustive]` (data-model.md) —
+        // this example is a separate crate (Cargo compiles `examples/` as
+        // such), so a wildcard arm is required for a future, additive
+        // variant, exactly like matching `condarc::ChannelPriority`
+        // elsewhere in this ticket's own scope.
+        _ => {}
     }
-    let config = resolution.config;
-    println!("channel_priority: {:?}", config.channel_priority);
-    println!("channels:");
-    for channel in &config.channels {
-        println!("  {channel:?}"); // ChannelSpec's own Debug already redacts credentials
-    }
-    println!("allowed: {} entries, denied: {} entries", config.allowed_channels.len(), config.denied_channels.len());
 }
 ```
 
@@ -267,23 +279,25 @@ cargo run --example channel_config_smoke
 
 Expected outcome: prints an ordered channel list — non-empty in the
 common case (at minimum the built-in `defaults` URLs, if no `~/.condarc`
-exists or configures none explicitly), though spec.md's own Assumptions
-note the list can legitimately be empty if the machine's own `~/.condarc`
-explicitly configures an empty `custom_multichannels.defaults` or
-`default_channels` — the effective channel-priority mode, and the
-allow/deny list sizes — with no raw credential material ever printed,
+exists or configures none explicitly) — and the effective
+channel-priority mode, with no raw credential material ever printed,
 even if the running machine's own `~/.condarc` happens to contain any
-(its `ChannelSpec::Debug` impl, GEN-24's own existing defense-in-depth,
-redacts it regardless of this ticket's own upstream stripping). If the
-machine's own `~/.condarc` is rejected or unreadable, an additional
-`fell back due to: ...` line prints first (FR-019); nothing prints there
-for the ordinary missing-file case.
+(`ChannelSpec::Debug`, GEN-24's own existing defense-in-depth, redacts
+it regardless of this ticket's scope — see spec.md's Known Limitations
+for why this ticket doesn't strip it itself). If the machine's own
+`~/.condarc`'s allow/deny filtering (FR-019) legitimately removes every
+channel, this prints the distinct `NoChannels` message above instead of
+an empty list (FR-020) — one of two legitimate causes of an
+otherwise-empty resolution (spec.md Assumptions). If the machine's own
+`~/.condarc` is rejected, unreadable, or fails to expand (FR-018), an
+additional `fell back due to: ...` line prints first (FR-017); nothing
+prints there for the ordinary missing-file case.
 
 ## Validating "never writes to `~/.condarc`" manually
 
 1. Note `~/.condarc`'s modification time and a checksum of its contents
    (or create a throwaway one in a scratch home directory for this
    check, to avoid touching a real development machine's own file).
-2. Run the smoke test above, or any of the SC-002 integration tests,
+2. Run the smoke test above, or any of the SC-002 unit tests,
    against that file.
 3. Confirm the modification time and checksum are unchanged.

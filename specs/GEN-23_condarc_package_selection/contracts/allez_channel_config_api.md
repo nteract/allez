@@ -9,10 +9,12 @@ top-level module, `src/channel_config/mod.rs`, re-exported as
 `allez::channel_config::resolve_channel_config` via `src/lib.rs`.
 
 Per Constitution III (Dual-Primary Interface), this contract itself does
-not need a `--format json`/human split — GEN-25 inspects the returned
-`ChannelConfigResolution`'s `fallback` field to decide how to react, then
-renders its `config` through the existing `output::render_*` path, the
-same way GEN-24's own public API does.
+not need a `--format json`/human split — GEN-25 matches on the returned
+`ChannelConfigResolution`: for `Ready { config, fallback }`, it inspects
+`fallback` to decide how to react, then
+renders `config` through the existing `output::render_*` path, the
+same way GEN-24's own public API does; for `NoChannels`, there is no
+`config` to render at all (FR-020).
 
 ## Public function
 
@@ -20,35 +22,56 @@ same way GEN-24's own public API does.
 /// Locates and reads `~/.condarc`, parses and resolves it through the
 /// `condarc` crate, and adapts the result into GEN-24's
 /// `ChannelConfig` shape, paired with an explicit fallback signal
-/// (FR-019).
+/// (FR-017) — or reports FR-020's zero-usable-channels case instead of
+/// ever constructing an intentionally-empty `ChannelConfig`.
 ///
 /// Always returns a fully-populated `ChannelConfigResolution` — never
 /// fails, and never panics. A missing `~/.condarc` falls back to conda's
 /// own documented default channel configuration silently, with no
-/// observability record and `fallback: None` (FR-010). A `~/.condarc`
-/// the `condarc` crate rejects, or one that exists but cannot be read
-/// due to an OS permission/I-O error, falls back the same way but
-/// records the specific condition through this project's structured
-/// observability AND via `fallback: Some(FallbackReason::Rejected)` /
-/// `Some(FallbackReason::Unreadable)`, distinct from the silent
-/// missing-file case (FR-012/FR-019) — so a caller (e.g. GEN-25) can
-/// decide how to react without separately consulting observability
-/// output. Every credential-stripping event the crate's `resolve()`
-/// reports for this call is also recorded (FR-013).
+/// observability record and `Ready { fallback: None, .. }` (FR-009). A
+/// `~/.condarc` the `condarc` crate rejects, one that exists but cannot
+/// be read due to an OS permission/I-O error, or one whose
+/// `condarc::expand_channels()` call itself fails (FR-018), falls back
+/// the same way but records the specific condition through this
+/// project's structured observability AND via
+/// `Ready { fallback: Some(FallbackReason::Rejected), .. }` /
+/// `Ready { fallback: Some(FallbackReason::Unreadable), .. }`, distinct
+/// from the silent missing-file case (FR-011/FR-017) — so a caller (e.g.
+/// GEN-25) can decide how to react without separately consulting
+/// observability output. A `~/.condarc` that resolves successfully but
+/// whose allow/deny filtering (FR-019) leaves zero channels returns
+/// `NoChannels` instead (FR-020) — never a `Ready` carrying an empty
+/// `ChannelConfig`.
 ///
 /// Resolves fresh from `~/.condarc` on every call. Never caches or
-/// reuses a previous result across separate calls (FR-017). Never
-/// writes to, modifies, or otherwise manages `~/.condarc` (FR-015).
+/// reuses a previous result across separate calls (FR-015). Never
+/// writes to, modifies, or otherwise manages `~/.condarc` (FR-013).
 pub fn resolve_channel_config() -> ChannelConfigResolution;
 
 /// The result of one `resolve_channel_config` call — see `data-model.md`
-/// for the full type definition. `config` is GEN-24's own, unmodified
-/// `allez::ephemeral::ChannelConfig`; `fallback` is `None` unless this
-/// call's fallback was caused by a rejected or unreadable `~/.condarc`
-/// (FR-019).
-pub struct ChannelConfigResolution {
-    pub config: allez::ephemeral::ChannelConfig,
-    pub fallback: Option<FallbackReason>,
+/// for the full type definition and research.md R13 for why this is an
+/// enum rather than a struct.
+#[non_exhaustive]
+pub enum ChannelConfigResolution {
+    /// A resolution that produced at least one usable channel, whether
+    /// from a real, populated `~/.condarc` or from conda's own
+    /// documented defaults (missing/rejected/unreadable/unexpandable
+    /// fallback).
+    Ready {
+        /// GEN-24's own, unmodified `crate::ephemeral::ChannelConfig`.
+        /// `allowed_channels`/`denied_channels` are always empty —
+        /// FR-019 already filtered `channels` before this value was
+        /// constructed.
+        config: crate::ephemeral::ChannelConfig,
+        /// `None` unless this call's fallback was caused by a rejected,
+        /// unreadable, or unexpandable `~/.condarc` (FR-017/FR-018).
+        fallback: Option<FallbackReason>,
+    },
+    /// A fully successful resolution whose allow/deny filtering left
+    /// zero usable channels (FR-019/FR-020) — not a fallback, not an
+    /// error, and never paired with a `ChannelConfig` a caller could
+    /// mistakenly pass to GEN-24.
+    NoChannels,
 }
 
 /// Re-exported from `src/channel_config/mod.rs` so an external caller
@@ -62,47 +85,58 @@ pub use events::FallbackReason;
 
 - **Total function**: for every possible state of `~/.condarc` within
   this ticket's supported scope (populated, absent, rejected by the
-  crate, or unreadable due to an OS permission/I-O error), this function
-  returns a value — it has no `Result`/`Option` return type and no panic
-  path (SC-002).
+  crate, unreadable due to an OS permission/I-O error, or unexpandable
+  per FR-018), this function returns a value — no `Result`/`Option`
+  return type, no panic path (SC-002). It never constructs an
+  intentionally-empty `ChannelConfig` either — `NoChannels` exists
+  specifically so a caller cannot receive one (FR-020).
 - **Fallback is inspectable in the return value, not only via
-  observability** (FR-019): `fallback` distinguishes the
-  rejected/unreadable cases from a fully-successful resolution and from
-  the silent missing-file case, so a caller can decide whether to warn,
-  proceed, or abort on that condition without separately consulting
-  observability output. `fallback` is `None` in exactly the two cases
-  where FR-010/observability are also silent-or-successful (absent, or
-  parses successfully).
+  observability** (FR-017): `Ready.fallback` distinguishes the
+  rejected/unreadable/unexpandable cases from a fully-successful
+  resolution and from the silent missing-file case, so a caller can
+  decide whether to warn, proceed, or abort without separately
+  consulting observability output. `fallback` is `None` in exactly the
+  two cases where FR-009/observability are also silent-or-successful
+  (absent, or parses and expands successfully).
 - **File-state → outcome mapping**:
 
-  | `~/.condarc` state | `config` | Observability | `fallback` (FR-019) |
-  |---|---|---|---|
-  | Absent | Conda's documented defaults (`condarc::resolve(&Config::default())`) | None (FR-010) | `None` |
-  | Present, `condarc::parse` rejects it | Same as absent | `ChannelConfigFallbackEvent { reason: Rejected, detail: <ValidationReport> }` (FR-012) | `Some(FallbackReason::Rejected)` |
-  | Present, unreadable (OS permission/I-O error) | Same as absent | `ChannelConfigFallbackEvent { reason: Unreadable, detail: <io::Error> }` (FR-012) | `Some(FallbackReason::Unreadable)` |
-  | Present, parses successfully | `adapt(condarc::resolve(&config))` | `CredentialStripLogRecord` per stripping event, if any (FR-013) | `None` |
+  | `~/.condarc` state | Result | `config` | Observability | `fallback` (FR-017) |
+  |---|---|---|---|---|
+  | Absent | `Ready` | Conda's documented defaults (`condarc::expand_channels(&Config::default())`, always non-empty) | None (FR-009) | `None` |
+  | Present, `condarc::parse` rejects it | `Ready` | Same as absent | `ChannelConfigFallbackEvent { reason: Rejected, detail: <redacted, length-bounded ValidationReport text> }` (FR-011/FR-021) | `Some(FallbackReason::Rejected)` |
+  | Present, unreadable (OS permission/I-O error) | `Ready` | Same as absent | `ChannelConfigFallbackEvent { reason: Unreadable, detail: <redacted, length-bounded io::Error text> }` (FR-011/FR-021) | `Some(FallbackReason::Unreadable)` |
+  | Present, parses, but `condarc::expand_channels` returns `Err` (FR-018) | `Ready` | Same as absent | `ChannelConfigFallbackEvent { reason: Rejected, detail: <redacted, length-bounded ExpandChannelsError text> }` (FR-011/FR-021, `Rejected` broadened per research.md R11) | `Some(FallbackReason::Rejected)` |
+  | Present, parses and expands successfully, `channels` non-empty | `Ready` | `adapt(condarc::expand_channels(&config)?)` | None (FR-009, ordinary success) | `None` |
+  | Present, parses and expands successfully, `channels` empty (FR-019 filtering removed every entry, or the configuration otherwise resolves to an empty list) | `NoChannels` | — no `ChannelConfig` constructed (FR-020) | None (a successful resolution, not a fallback) | — no `fallback` field on this variant |
 
-- **Never mutates `~/.condarc`** (FR-015) — this function only ever
+- **Never mutates `~/.condarc`** (FR-013) — this function only ever
   calls `std::fs::read_to_string` (or an equivalent read-only primitive)
   against the resolved path; no write, rename, or delete of any kind.
-- **Every credential-stripping event the crate reports is recorded**
-  (FR-013), and only those events — a malformed-file fallback (FR-012)
-  never itself produces a `CredentialStripLogRecord`, since `condarc::resolve`
-  is never invoked on that path (`condarc::parse` already returned
-  `Err` before resolution could run).
-- **Adaptation is lossless and field-by-field** (FR-014/SC-001): the
-  returned `ChannelConfig`'s four fields are populated directly from
-  `condarc::ResolvedChannels`'s four corresponding fields, with no
-  additional resolution or transformation logic — verifiable by
-  constructing both independently from the same `.condarc` sample and
-  comparing.
-- **No effect on GEN-24's own existing behavior** (FR-018): this
+- **Embedded credential material passes through unchanged** — dropped
+  during review; see spec.md's Known Limitations. The one exception is
+  the fallback observability event's own `detail` field, which is
+  redacted and length-bounded before emission (FR-021) — a property of
+  this ticket's own new observability record, not of the resolved
+  channel identifiers themselves.
+- **Adaptation is lossless and field-by-field** (FR-012/SC-001): the
+  returned `ChannelConfig`'s `channels`/`channel_priority` fields are
+  populated directly from `condarc::ResolvedChannels`'s two corresponding
+  fields, with no additional resolution or transformation logic;
+  `allowed_channels`/`denied_channels` are always empty, since FR-019
+  already applied that filtering upstream, inside `expand_channels()`
+  itself — verifiable by constructing both independently from the same
+  `.condarc` sample and comparing.
+- **No effect on GEN-24's own existing behavior** (FR-016): this
   function never edits, and its own logic never re-implements,
   `allez::ephemeral`'s existing empty-channel-list fallback, allow/deny
-  filtering, or defense-in-depth credential redaction — it only
+  filtering (`filter_channels()`, still called unmodified from
+  `solve_packages()`), or defense-in-depth credential redaction — it only
   constructs a `ChannelConfig` value for a caller (e.g. GEN-25) to pass
   into `create_ephemeral_environment` unchanged, exactly as any other
-  caller of that already-published function would.
+  caller of that already-published function would. `filter_channels()`
+  simply has nothing left to remove for a `ChannelConfig` this function
+  produces (see spec.md Assumptions, "Two independent implementations of
+  the same filtering policy").
 
 ## Non-goals (explicitly out of this contract)
 
@@ -110,7 +144,11 @@ pub use events::FallbackReason;
   job).
 - Any policy for what a caller does with a `Some(FallbackReason)`
   fallback signal (warn, abort, ignore) — GEN-25's own job; this
-  contract only guarantees the signal is present and accurate (FR-019).
+  contract only guarantees the signal is present and accurate (FR-017).
+- Any policy for what a caller does with a `NoChannels` result (warn,
+  abort, proceed with no environment) — GEN-25's own job; this contract
+  only guarantees a caller can never mistake it for a `Ready` carrying an
+  empty `ChannelConfig` (FR-020).
 - Applying `ChannelConfig` to an actual environment creation — this
   function's return value is an *input* to `create_ephemeral_environment`
   (GEN-24), not a call to it.
@@ -119,5 +157,5 @@ pub use events::FallbackReason;
   only, matching GEN-36's own already-documented single-document,
   no-merge boundary.
 - Retrying, watching, or invalidating a previous result — every call is
-  independent and reads fresh (FR-017); there is no caching layer to
+  independent and reads fresh (FR-015); there is no caching layer to
   invalidate.

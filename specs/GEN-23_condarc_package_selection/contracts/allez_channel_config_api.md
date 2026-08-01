@@ -25,8 +25,11 @@ same way GEN-24's own public API does; for `NoChannels`, there is no
 /// (FR-017) — or reports FR-020's zero-usable-channels case instead of
 /// ever constructing an intentionally-empty `ChannelConfig`.
 ///
-/// Always returns a fully-populated `ChannelConfigResolution` — never
-/// fails, and never panics. A missing `~/.condarc` falls back to conda's
+/// Always returns a fully-populated `ChannelConfigResolution` for every
+/// `~/.condarc` state a caller can present — never fails, and never
+/// panics on any such input. (One defended internal invariant, not a
+/// caller-reachable input state, is documented under "Total function"
+/// below.) A missing `~/.condarc` falls back to conda's
 /// own documented default channel configuration silently, with no
 /// observability record and `Ready { fallback: None, .. }` (FR-009). A
 /// `~/.condarc` the `condarc` crate rejects, one that exists but cannot
@@ -87,9 +90,21 @@ pub use events::FallbackReason;
   this ticket's supported scope (populated, absent, rejected by the
   crate, unreadable due to an OS permission/I-O error, or unexpandable
   per FR-018), this function returns a value — no `Result`/`Option`
-  return type, no panic path (SC-002). It never constructs an
+  return type, and no panic path reachable from any such state
+  (SC-002). It never constructs an
   intentionally-empty `ChannelConfig` either — `NoChannels` exists
-  specifically so a caller cannot receive one (FR-020).
+  specifically so a caller cannot receive one (FR-020). This guarantee
+  depends on one internal invariant: resolving `Config::default()`
+  itself (the default-fallback path every non-`Ready`-from-real-file
+  case routes through) is guaranteed to succeed, never to hit FR-018's
+  error case, because the crate's own built-in default `channel_alias`
+  is never the empty string that error requires. If a future change to
+  the crate's own built-in defaults ever violated that invariant, this
+  function would deliberately panic with a diagnostic message rather
+  than silently misreport the failure as `NoChannels` or a fabricated
+  fallback reason (data-model.md) — a defended, documented failure of an
+  internal invariant, not a possible outcome of any `~/.condarc` content
+  a caller controls.
 - **Fallback is inspectable in the return value, not only via
   observability** (FR-017): `Ready.fallback` distinguishes the
   rejected/unreadable/unexpandable cases from a fully-successful
@@ -112,12 +127,16 @@ pub use events::FallbackReason;
 - **Never mutates `~/.condarc`** (FR-013) — this function only ever
   calls `std::fs::read_to_string` (or an equivalent read-only primitive)
   against the resolved path; no write, rename, or delete of any kind.
-- **Embedded credential material passes through unchanged** — dropped
-  during review; see spec.md's Known Limitations. The one exception is
-  the fallback observability event's own `detail` field, which is
-  redacted and length-bounded before emission (FR-021) — a property of
-  this ticket's own new observability record, not of the resolved
-  channel identifiers themselves.
+- **Embedded credential material passes through unchanged** in the
+  resolved channel identifiers themselves — this ticket's own scope does
+  not strip or transform them. The one exception is the fallback
+  observability event's own `detail` field, which is redacted and
+  length-bounded before emission (FR-021) — a property of this ticket's
+  own new observability record, not of the resolved channel identifiers
+  themselves. `ResolvedChannels`'s own `Debug` output redacts the same
+  two patterns independently, as a presentation-only safeguard against
+  incidental printing (data-model.md) — this too does not change the
+  `channels` values themselves.
 - **Adaptation is lossless and field-by-field** (FR-012/SC-001): the
   returned `ChannelConfig`'s `channels`/`channel_priority` fields are
   populated directly from `condarc::ResolvedChannels`'s two corresponding

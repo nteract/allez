@@ -148,7 +148,9 @@ function and constant are unmodified by this ticket (FR-016).
 - `resolve_entry(entry, ctx) -> Result<Vec<String>, ExpandChannelsError>`
   — full precedence: (a) match against conda's own scheme pattern
   (`^[a-z][a-z0-9]{0,11}://`), used as-is on a match; (b) `custom_multichannels`
-  lookup (`"defaults"` checked first); (c) `custom_channels`
+  lookup by `entry`'s own name (for the literal entry `"defaults"`, its
+  own `custom_multichannels` key is checked first, per the walkthrough
+  below); (c) `custom_channels`
   progressive-prefix match, joined as `base_url.trim_end_matches('/') + "/" + entry`
   (R6); (d) `channel_alias` join, `channel_alias.trim_end_matches('/') + "/" + entry`.
   Used for every top-level `channels`/`allowlist_channels`/`denylist_channels`
@@ -265,7 +267,7 @@ correctly.
 delegates to a `pub(crate)` function,
 `resolve_channel_config_from(path: Option<&Path>) -> ChannelConfigResolution`,
 that takes an explicit, optional `.condarc` path. SC-002's
-missing/rejected/unreadable/populated matrix is driven through
+missing/rejected/unreadable/expansion-failing/populated matrix is driven through
 `resolve_channel_config_from` directly via co-located `#[cfg(test)]` unit
 tests (`tempfile::NamedTempFile`, a missing-by-construction path, or a
 file written with invalid UTF-8 bytes for the unreadable case — see
@@ -278,9 +280,9 @@ is `pub(crate)`, and a Rust integration test compiles as a separate
 crate, which cannot name a `pub(crate)` item at all. The same applies to
 SC-004's observability-capture tests (3 fallback-path cases — rejected,
 unreadable, and an `expand_channels()` failure sharing `Rejected`'s
-treatment per R11) and to SC-001's five-sample adaptation contract test,
+treatment per R11) and to SC-001's six-sample adaptation contract test,
 which calls the private `adapt()` function directly inside
-`src/channel_config/adapt.rs`. Each of SC-001's 5 samples parses a
+`src/channel_config/adapt.rs`. Each of SC-001's 6 samples parses a
 hand-authored `.condarc` string, resolves it through
 `condarc::expand_channels`, calls the real `adapt()`, and asserts it
 equals a hand-typed literal `ChannelConfig` — never re-deriving the
@@ -336,8 +338,14 @@ in every environment this ticket's tests run in.
 
 Every other `allez`-level scenario test stays on the path-injectable
 internal function (SC-002's five file states plus the argument-level
-`None` case, six tests total; the SC-004 observability-capture group —
-3 dedicated tests — plus SC-005's/SC-006's own dedicated cases). SC-003's
+`None` case, six tests total, one of which also covers SC-005's own
+`allez`-level case; the SC-004 observability-capture group — 3
+fallback-path cases plus the FR-009 zero-events negative case, 4
+dedicated tests — plus SC-006's own dedicated case, SC-007's
+end-to-end redacted-detail assertion; and FR-013's
+never-mutates, FR-014's unknown-key-tolerance, FR-015's no-caching, and
+the non-filtering-caused `NoChannels` case, one dedicated test each).
+SC-003's
 22 scenarios are not part of this `allez`-level accounting at all — they
 are crate-level tests of `condarc::expand_channels()` itself, in
 `crates/condarc/tests/expand_channels_scenarios.rs`, and never touch
@@ -360,12 +368,15 @@ branching logic worth an automated test.
 `src/channel_config/events.rs`:
 
 - `ChannelConfigFallbackEvent` (FR-011): `schema_version`, `reason`
-  (`"rejected"` | `"unreadable"`), `detail` — the crate's own per-problem
-  `ValidationReport::to_string()` for `"rejected"`, or the `io::Error`'s
-  own `Display` text for `"unreadable"` — passed through
-  `redact_and_bound(&str) -> String` before construction (FR-021): every
-  substring matching the FR-001(a) scheme pattern has its userinfo and
-  `/t/<segment>/` path component stripped (the same two patterns
+  (`FallbackReason::Rejected` | `FallbackReason::Unreadable`, promoted to
+  `pub` by R10), `detail` — the crate's own per-problem
+  `ValidationReport::to_string()` for `FallbackReason::Rejected`, or the `io::Error`'s
+  own `Display` text for `FallbackReason::Unreadable` — passed through
+  `redact_and_bound(&str) -> String` before construction (FR-021).
+  `redact_and_bound` delegates the actual redaction to this module's own
+  private `redact_channel_credentials` (R14), then bounds the result:
+  every substring matching the FR-001(a) scheme pattern has its userinfo
+  and `/t/<segment>/` path component stripped (the same two patterns
   `redact_channel_url()`, `src/ephemeral/channels.rs`, GEN-24, already
   applies to a single URL, here applied independently to every matched
   substring in free-form text, not just the first), then the result is
@@ -373,9 +384,11 @@ branching logic worth an automated test.
   the nearest UTF-8 character boundary. Not a call into
   `redact_channel_url()` itself — that function's own signature takes
   one already-known-to-be-a-URL value, not a free-form string that may
-  embed zero, one, or more of them — so this is a second, independent
-  implementation for a different input shape, the same pattern R12
-  already establishes for `filter_channels()`'s policy.
+  embed zero, one, or more of them — so this module's `redact_channel_credentials`
+  is a second, independent implementation for a different input shape,
+  the same pattern R12 already establishes for `filter_channels()`'s
+  policy (and, per R14, the same pattern this ticket's `crates/condarc`
+  side also uses independently, for a different consumer).
 
 Emitted via `tracing::warn!` (a fallback is a recovered problem,
 warranting attention) through the existing `src/observability.rs`
@@ -580,16 +593,80 @@ this one call earlier is not optional once R12 moves filtering into
   success, not a failure to compute one; conflating the two would make
   `ExpandChannelsError` (R11) mean two unrelated things.
 
+## R14 — `ResolvedChannels` does not derive `Debug`; its own private `redact_channel_credentials` is a second, independent implementation of R9's redaction patterns
+
+**Decision**: `ResolvedChannels` (`crates/condarc`) derives
+`Clone, PartialEq, Eq` but not `Debug`. Its manual `Debug` impl
+(data-model.md) redacts each `channels` entry through a private
+`redact_channel_credentials` function declared in the same file,
+applying the same two patterns R9's `redact_and_bound` applies (URL
+userinfo, `/t/<segment>/`), before rendering the ordinary derived-style
+output.
+
+**Rationale**: `channels` entries come directly from `~/.condarc` and
+can embed the same credential shapes FR-021 already redacts out of
+observability text. A derived `Debug` would print them verbatim in any
+test failure, panic message, or incidental `{:?}` logging call.
+`redact_and_bound`'s own `redact_channel_credentials` (`allez`,
+`src/channel_config/events.rs`) cannot be called from here: `crates/condarc`
+has no dependency on `allez` (R7). The two functions are therefore a
+second, independent implementation of the same redaction patterns, not
+a shared one — the same pattern R12 already establishes for
+`filter_channels()`'s policy.
+
+**Alternatives considered**:
+- *Keep the derived `Debug` and rely on callers not to print `channels`
+  carelessly* — rejected: nothing enforces that, and the type is public.
+- *Make the redaction function `pub` in `condarc` and have `allez` call
+  it* — rejected: it would make `redact_and_bound` depend on `condarc`
+  for a two-line pattern match, coupling an `allez`-internal
+  observability detail to the crate's public surface for no benefit.
+
+## R15 — `resolve_channel_config_from`'s internal `Config::default()` fallback call is defended by an explicit invariant, not left as an unstated `Err` arm
+
+**Decision**: The internal call to `condarc::expand_channels(&Config::default())`
+(the path every non-`Ready`-from-real-file case routes through) unwraps
+via `.expect(...)` with a diagnostic message, rather than propagating or
+silently reinterpreting a hypothetical `Err`.
+
+**Rationale**: `Config::default()`'s `channel_alias` is `None`, which
+FR-002 defaults to the non-empty built-in alias — never the empty
+string `ExpandChannelsError::EmptyChannelAlias` requires — so this call
+is guaranteed to succeed. The crate's own signature does not encode that
+guarantee at the type level, so the call site must either leave the
+`Err` arm's behavior unstated (the defect this decision closes) or
+handle it explicitly. Mapping a hypothetical `Err` to `NoChannels` or a
+fabricated `FallbackReason` would misrepresent a broken built-in
+invariant as an ordinary user-input outcome; a deliberate panic with a
+diagnostic message keeps the failure mode honest. The crate-level test
+asserting `Config::default()` resolves and cannot reach
+`EmptyChannelAlias` (User Story 1) is what would catch a future
+violation of this invariant, before it ever reached this call site.
+
+**Alternatives considered**:
+- *Silently map the hypothetical `Err` to `NoChannels`* — rejected: a
+  caller would read `NoChannels` as "the user's own configuration
+  legitimately has zero channels" (FR-020), not "a built-in default
+  broke."
+- *Expose an infallible, crate-level default-resolution function* —
+  rejected: it would add a second public entry point to `condarc` for a
+  guarantee `expand_channels()`'s existing signature already documents
+  by convention.
+
 ## Test strategy
 
 - **Crate-level** (`crates/condarc/`): unit tests co-located in
-  `expand_channels.rs` for each of R5/R6's crate-private helpers
-  (`resolve_entry`, `resolve_member`, the progressive-prefix matcher); a
+  `expand_channels.rs` for each of R5/R6/R12's crate-private helpers
+  (`resolve_entry`, `resolve_member`, the progressive-prefix matcher,
+  `apply_allow_deny`),
+  plus R14's `redact_channel_credentials`/`Debug`-impl test; a
   new integration test file, `crates/condarc/tests/expand_channels_scenarios.rs`,
   mapping every one of SC-003's 22 named scenarios to one `#[test]` each
   with hand-authored `.condarc` YAML strings, plus SC-005's own
   crate-level case (an empty-string-alias entry asserting
-  `Err(ExpandChannelsError::EmptyChannelAlias)`, R11). No JSON
+  `Err(ExpandChannelsError::EmptyChannelAlias)`, R11), the `Config::default()`
+  regression case, and the FR-006/FR-007/FR-008/US1-AS4/US1-AS5/US3-AS3/FR-002-explicit-empty
+  regression scenarios. No JSON
   conformance-corpus fixtures — GEN-36's own conformance harness has no
   oracle for channel *resolution*, only parse-shape coercion (its Python
   drivers invoke real conda's `Context.validate_all()`, never its
@@ -608,21 +685,29 @@ this one call earlier is not optional once R12 moves filtering into
   so tests needing this capture stay independent of every other test
   running in parallel) — both
   co-located unit tests, not integration tests, since that function is
-  `pub(crate)`. SC-001's five-sample contract test is likewise a
+  `pub(crate)`. SC-001's six-sample contract test is likewise a
   co-located unit test inside `src/channel_config/adapt.rs`, calling
   `adapt()` directly. Each of SC-002's five cases also asserts
   `ChannelConfigResolution::Ready { fallback, .. }`'s exact value
   (`None`/`Some(Rejected)`/`Some(Unreadable)`/`Some(Rejected)`/`None`,
   FR-017/R10/R11), not only `config` — plus SC-006's own case asserting
   `NoChannels` (never a `Ready` carrying an empty `ChannelConfig`) for a
-  `.condarc` whose FR-019 filtering empties `channels` (R13). SC-005's
+  `.condarc` whose FR-019 filtering empties `channels` (R13), plus a
+  second, non-filtering-caused `NoChannels` case (a `.condarc` setting
+  `custom_multichannels: {defaults: []}` alone), and FR-013's
+  never-mutates, FR-014's unknown-key-tolerance, and FR-015's
+  no-caching tests (one dedicated test each — full accounting above).
+  SC-005's
   `allez`-level half (the crate's `Err` triggering the rejected-equivalent
   fallback) lives alongside the other `resolve_channel_config_from`-driven
   tests. SC-007 is a co-located unit test in `src/channel_config/events.rs`
   itself (not `mod.rs`), calling `redact_and_bound` directly for the
   redaction and truncation cases, plus one `resolve_channel_config_from`-driven
   end-to-end assertion in `mod.rs` confirming the emitted event's
-  `detail` is already redacted. There is deliberately no automated test
+  `detail` is already redacted. `events.rs` also holds its own
+  co-located `emit_fallback()` unit test, asserting the captured event
+  carries exactly `reason`, `schema_version`, and the already-redacted
+  `detail` — no additional or omitted fields. There is deliberately no automated test
   of the public,
   zero-argument `resolve_channel_config()` wrapper against a real
   `.condarc`; `examples/channel_config_smoke.rs` (quickstart.md) is its

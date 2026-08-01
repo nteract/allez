@@ -3,8 +3,7 @@
 This is a validation/run guide, not an implementation walkthrough — see
 `contracts/condarc_resolve_api.md` and `contracts/allez_channel_config_api.md`
 for the two public APIs this feature adds, and `data-model.md` for every
-type. Task-by-task implementation breakdown is a separate, later
-artifact (`tasks.md`, produced by `/speckit.tasks`).
+type.
 
 ## Prerequisites
 
@@ -114,6 +113,16 @@ target platforms per the workspace's own CI matrix.
 - **FR-008** — a `.condarc` setting `channel_settings` never causes any
   entry to appear in `ResolvedChannels.channels`, and the setting itself
   is never read.
+- **User Story 1 Acceptance Scenario 4** — a `.condarc` setting
+  `channels` to a non-empty list that omits `defaults` resolves to only
+  the channels derived from that list — `default_channels` is never
+  appended alongside it.
+- **FR-002 explicit-empty rows** — `default_channels: []` (with
+  `channels: [defaults]` and no `custom_multichannels.defaults` entry)
+  resolves to an empty `channels` list, and `custom_channels: {}`
+  resolves a bare name that would otherwise hit conda's built-in
+  `custom_channels` mapping via `channel_alias` instead — neither
+  explicit empty value is replaced by its built-in default.
 - **User Story 3 Acceptance Scenarios 1/2/5** — `channel_priority`
   already-coerced-by-`parse()` passthrough for all three modes, the
   absent-defaults-to-`Flexible` case, and the two legacy boolean
@@ -172,16 +181,20 @@ target platforms per the workspace's own CI matrix.
   `src/channel_config/adapt.rs`, calling the private `adapt()` function
   directly (not a `tests/` integration test, since `adapt()` isn't
   `pub` — research.md R8), for at least 5 distinct, real-world-shaped
-  `.condarc` samples (e.g. a plain `channels: [conda-forge, defaults]`;
-  one exercising `custom_channels`+`custom_multichannels` together; one
-  setting `allowlist_channels`/`denylist_channels`; one with
-  `channel_priority` set via a legacy boolean spelling; one relying
-  purely on defaults), confirming `adapt()`'s field-by-field mapping
-  (FR-012) produces the exact same `ChannelConfig` a hand-written
+  `.condarc` samples that do not set `allowlist_channels`/`denylist_channels`
+  (e.g. a plain `channels: [conda-forge, defaults]`; one exercising
+  `custom_channels`+`custom_multichannels` together; one whose `channels`
+  mixes the `defaults` placeholder with an already-fully-qualified URL
+  entry; one with `channel_priority` set via a legacy boolean spelling;
+  one relying purely on defaults), confirming `adapt()`'s field-by-field
+  mapping (FR-012) produces the exact same `ChannelConfig` a hand-written
   expected value would — the expected value's own
   `allowed_channels`/`denied_channels` always `Vec::new()`, since
   `ResolvedChannels` no longer carries those as separate fields
-  (FR-019, research.md R12).
+  (FR-019, research.md R12). A sixth sample setting
+  `allowlist_channels`/`denylist_channels` is added once allow/deny
+  filtering exists, asserting the same field-by-field mapping against
+  the post-filtering result.
 - **SC-004** — one test per fallback path (a `parse()` rejection, an
   `expand_channels()` failure per FR-018, and an unreadable file)
   asserting a `ChannelConfigFallbackEvent` is actually emitted (captured
@@ -210,18 +223,24 @@ target platforms per the workspace's own CI matrix.
   `ChannelConfigResolution::NoChannels` — not `Ready` with an empty
   `ChannelConfig` — proving `allez`'s own layer catches this before
   GEN-24's `channels_with_fallback` ever could (FR-020, research.md
-  R13).
-- **SC-007** — a `.condarc` whose crate-rejected/unreadable content
-  itself contains a URL userinfo segment or an access-token path
-  segment (including a case with two such URLs embedded in the same
-  detail text) asserts the emitted `ChannelConfigFallbackEvent.detail`
-  no longer contains either (FR-021); a separate case supplies a detail
+  R13). A separate, non-filtering-caused case — a `.condarc` setting
+  `custom_multichannels: {defaults: []}` with no `allowlist_channels`/
+  `denylist_channels` involved — asserts the same `NoChannels` result,
+  covering FR-020's other legitimate cause (spec.md Design Decisions,
+  "Empty resolved list, two legitimate causes").
+- **SC-007** — a URL userinfo segment or an access-token path
+  segment embedded in a URL-shaped substring (including a case with two
+  such URLs embedded in the same detail text) asserts the emitted
+  `ChannelConfigFallbackEvent.detail` no longer contains either (FR-021); a separate case supplies a detail
   text longer than `MAX_FALLBACK_DETAIL_LEN` (2048 bytes) and asserts
   the emitted value is truncated to it, at a valid UTF-8 boundary. Both
   are co-located unit tests in `src/channel_config/events.rs`, calling
   `redact_and_bound` directly and, separately, asserting the same
   property end-to-end through `resolve_channel_config_from`'s own
-  per-test-scoped `tracing::subscriber::with_default` capture.
+  per-test-scoped `tracing::subscriber::with_default` capture, driven
+  against a **rejected** `.condarc` fixture — never an unreadable one,
+  whose `detail` is `io::Error`'s own `Display` text and never carries
+  `.condarc` content to redact.
 - **FR-013** — after any `resolve_channel_config_from` call against a
   real file (each of SC-002's four file-exists states: populated,
   rejected, unreadable, expansion-failing), the file's own modification
@@ -283,8 +302,9 @@ exists or configures none explicitly) — and the effective
 channel-priority mode, with no raw credential material ever printed,
 even if the running machine's own `~/.condarc` happens to contain any
 (`ChannelSpec::Debug`, GEN-24's own existing defense-in-depth, redacts
-it regardless of this ticket's scope — see spec.md's Known Limitations
-for why this ticket doesn't strip it itself). If the machine's own
+it regardless of this ticket's scope; `ResolvedChannels`'s own `Debug`
+impl applies the same redaction independently one layer earlier,
+data-model.md). If the machine's own
 `~/.condarc`'s allow/deny filtering (FR-019) legitimately removes every
 channel, this prints the distinct `NoChannels` message above instead of
 an empty list (FR-020) — one of two legitimate causes of an

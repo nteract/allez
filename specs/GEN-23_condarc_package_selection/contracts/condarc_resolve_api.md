@@ -31,11 +31,14 @@ pub fn expand_channels(config: &Config) -> Result<ResolvedChannels, ExpandChanne
 
 ```rust
 #[non_exhaustive]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ResolvedChannels {
     pub channels: Vec<String>,
     pub channel_priority: ChannelPriority,
 }
+
+impl std::fmt::Debug for ResolvedChannels { /* redacts URL userinfo/access-token
+    material in `channels` before printing — see data-model.md */ }
 
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,6 +68,15 @@ carries separate `allowlist_channels`/`denylist_channels` fields — see
   (FR-019) legitimately empties `channels` — that is a successful `Ok`
   with an empty list, never an `Err` (see spec.md Design Decisions,
   "Empty resolved list, two legitimate causes").
+- **`Config::default()` specifically is guaranteed to resolve
+  successfully, never `Err`.** `Config::default()`'s `channel_alias`
+  field is `None`, which this contract's own defaulting resolves to the
+  non-empty built-in alias, never the empty string `EmptyChannelAlias`
+  requires — so this particular input can never reach the one `Err`
+  case above. Callers relying on this for a default-fallback path
+  (e.g. `allez`'s own file-handling layer) still match on the `Result`
+  rather than unwrapping unchecked, since this signature does not
+  encode the guarantee at the type level.
 - **Ordering is preserved.** `channels[i]`'s relative order matches the
   order its corresponding source entry (or, for a `defaults`
   substitution, the corresponding `custom_multichannels`/`default_channels`
@@ -79,10 +91,15 @@ carries separate `allowlist_channels`/`denylist_channels` fields — see
   separate schemeless-`custom_channels`-value corner remains unspecified
   (see spec.md's Known Limitations — no evidence any real `.condarc`
   triggers it).
-- **Embedded credential material is passed through unchanged.** This
-  function does not strip or otherwise touch URL userinfo or a
-  `/t/<token>/` segment (see spec.md's Known Limitations — dropped during
-  review, deferred to GEN-29's own approach).
+- **Embedded credential material is passed through unchanged in the
+  data itself.** This function does not strip or otherwise touch URL
+  userinfo or a `/t/<token>/` segment in `channels`' values — that kind
+  of stripping is out of this ticket's scope, deferred to GEN-29's own
+  approach. `ResolvedChannels`'s own `Debug` impl redacts both patterns
+  before printing (data-model.md) so a test failure, panic message, or
+  incidental `{:?}` logging call doesn't leak them — that redaction is a
+  presentation-layer safeguard only, not a claim that the returned
+  `channels` values themselves are credential-free.
 - **`override_channels_enabled` has no effect on the output** (FR-006) —
   `expand_channels()` does not read that field at all.
 - **No deduplication pass of its own** (FR-007) — a coincidental repeat

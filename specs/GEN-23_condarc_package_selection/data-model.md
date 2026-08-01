@@ -36,8 +36,16 @@ type remains structurally required.
 /// entries used to compute `channels` are not themselves part of this
 /// type (research.md R12) — they exist only inside `expand_channels()`'s
 /// own implementation.
+///
+/// Does **not** derive `Debug`: `channels` entries come directly from
+/// `~/.condarc` and can embed URL userinfo (`user:pass@`) or an
+/// access-token path segment (`/t/<token>/`, the same shapes FR-021's
+/// observability redaction targets). A derived `Debug` would print those
+/// credentials verbatim in any test failure, panic message, or
+/// downstream `{:?}` logging call. The manual impl below redacts the
+/// same two patterns before printing.
 #[non_exhaustive]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ResolvedChannels {
     /// Ordered, concrete channel identifiers (see Concrete Channel
     /// Identifier in spec.md), preserving `channels`'/`default_channels`'
@@ -52,11 +60,55 @@ pub struct ResolvedChannels {
     /// (research.md R2).
     pub channel_priority: ChannelPriority,
 }
+
+impl std::fmt::Debug for ResolvedChannels {
+    /// Redacts each `channels` entry through `redact_channel_credentials`
+    /// (defined below, this crate's own private copy — see that
+    /// function's own doc comment for why it cannot be the same
+    /// implementation `allez`'s `redact_and_bound` uses), then renders
+    /// the ordinary derived-style output. Applied per-entry, independent
+    /// of FR-021's own 2048-byte bound — this impl has no length limit
+    /// of its own, since a `Debug` dump of a resolved channel list is
+    /// not the untrusted-text-in-a-log-line case FR-021 addresses.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResolvedChannels")
+            .field(
+                "channels",
+                &self.channels.iter().map(|c| redact_channel_credentials(c)).collect::<Vec<_>>(),
+            )
+            .field("channel_priority", &self.channel_priority)
+            .finish()
+    }
+}
+
+/// This crate's own private redaction primitive, used only by
+/// `ResolvedChannels`'s `Debug` impl above: for every substring matching
+/// the scheme pattern `[a-z][a-z0-9]{0,11}://` (same as FR-001(a)) up to
+/// the next whitespace or quote character, removes (a) any
+/// `user[:pass]@` userinfo immediately before the host, and (b) any
+/// `/t/<segment>/` path component. Text outside a matched substring is
+/// left untouched. Pure, infallible, no length bound.
+///
+/// `allez` has an identically-named, identically-behaved private
+/// function of its own (`redact_channel_credentials`, Structured
+/// observability, below) — a deliberate second, independent
+/// implementation of the same two redaction patterns, not a shared one:
+/// `crates/condarc` cannot depend on `allez` (research.md R7), the same
+/// reason FR-019's deny-then-allow filtering exists as two independent
+/// implementations rather than one shared call (research.md R12).
+fn redact_channel_credentials(raw: &str) -> String;
 ```
 
 `#[non_exhaustive]` matches every other public enum/struct GEN-36
 established in this crate, and leaves room for a future additive field
 without a breaking change.
+
+`ResolvedChannels`'s `Debug` redaction is a design-level defense-in-depth
+safeguard, not a formal requirement — spec.md's own redaction
+requirement (FR-021) is scoped to the fallback-observability `detail`
+text only. This safeguard exists so a value that already flows through
+this ticket's code doesn't leak credentials through an incidental
+`{:?}` print, independent of whether spec.md ever asks for it.
 
 ### `ExpandChannelsError`
 
@@ -128,16 +180,21 @@ pub fn expand_channels(config: &Config) -> Result<ResolvedChannels, ExpandChanne
 ### Internal (crate-private) helpers
 
 Not part of the public contract, listed here because `research.md`
-R5–R6/R11–R12 describe their exact behavior and `tasks.md` will need to
-break them out individually for TDD:
+R5–R6/R11–R12 describe their exact behavior and each needs to be
+independently unit-testable for TDD:
 
 ```rust
 /// Full FR-001 precedence: (a) scheme-pattern match
 /// (`^[a-z][a-z0-9]{0,11}://`), used as-is; (b) `custom_multichannels`
-/// lookup (`"defaults"` checked here first); (c) `custom_channels`
-/// progressive-prefix match, joined as
-/// `base_url.trim_end_matches('/') + "/" + entry` (research.md R6); (d)
-/// `channel_alias` join, `channel_alias.trim_end_matches('/') + "/" + entry`.
+/// lookup by `entry`'s own name (but when `entry` is the literal
+/// `"defaults"`, `ctx.custom_multichannels`'s own `"defaults"` entry is
+/// checked first; if it has none, `ctx.default_channels` supplies the
+/// members instead, per FR-002's table; this can legitimately be zero
+/// members when `default_channels` is an explicit empty list, see
+/// FR-002's explicit-empty row); (c) `custom_channels` progressive-prefix
+/// match, joined as `base_url.trim_end_matches('/') + "/" + entry` (research.md
+/// R6); (d) `channel_alias` join,
+/// `channel_alias.trim_end_matches('/') + "/" + entry`.
 /// Used for every top-level `channels`/`allowlist_channels`/`denylist_channels`
 /// entry.
 ///
@@ -205,6 +262,9 @@ struct ResolveContext<'a> {
     channel_alias: &'a str,
     custom_channels: HashMap<&'a str, &'a str>,
     custom_multichannels: &'a BTreeMap<String, Vec<String>>,
+    /// Consumed by `resolve_entry`'s branch (b) only, as the fallback
+    /// source for the reserved name `defaults` when
+    /// `custom_multichannels` has no `"defaults"` entry of its own.
     default_channels: Vec<&'a str>,
 }
 ```
@@ -268,8 +328,12 @@ unmodified public types, not reach into that module's own internals).
 /// FR-020's zero-usable-channels case instead of ever constructing an
 /// intentionally-empty `ChannelConfig`.
 ///
-/// Always returns a fully-populated [`ChannelConfigResolution`] — never
-/// fails, never panics. A missing `~/.condarc` falls back silently, with
+/// Always returns a fully-populated [`ChannelConfigResolution`] for
+/// every `~/.condarc` state within this ticket's supported scope — never
+/// fails, never panics on any input a caller supplies. The one exception
+/// is a defended internal invariant, not a caller-reachable input state:
+/// see [`resolve_channel_config_from`]'s own doc comment. A missing
+/// `~/.condarc` falls back silently, with
 /// `Ready { fallback: None, .. }` (FR-009); a file the crate rejects, one
 /// that cannot be read due to an OS permission/I-O error, or one whose
 /// `condarc::expand_channels()` call itself returns `Err` (FR-018), falls
@@ -299,15 +363,28 @@ pub fn resolve_channel_config() -> ChannelConfigResolution {
 ///
 /// Internally: `read_condarc` failure (`Missing`/`Unreadable`) or a
 /// `condarc::parse`/`condarc::expand_channels` `Err` all fall back to
-/// `condarc::expand_channels(&Config::default())` for `config` — a call
-/// that cannot itself produce `Err`, since `Config::default()`'s
+/// `condarc::expand_channels(&Config::default())` for `config`. This
+/// call is **guaranteed** not to produce `Err`: `Config::default()`'s
 /// `channel_alias` is `None`, which FR-002 defaults to the non-empty
 /// built-in alias, never the empty string `ExpandChannelsError::EmptyChannelAlias`
-/// requires; callers still match on the `Result` rather than unwrapping
-/// unchecked, since the crate's own signature does not encode that
-/// guarantee at the type level. On a successful `expand_channels()` call
-/// (real file or default fallback alike), an empty `.channels` produces
-/// `NoChannels`; otherwise `Ready { config: adapt(resolved), fallback }`.
+/// requires — the invariant this whole fallback path depends on.
+/// Because the crate's own signature does not encode that guarantee at
+/// the type level, this call site enforces it explicitly rather than
+/// leaving the `Err` arm's behavior unstated: it unwraps via
+/// `.expect("expand_channels(&Config::default()) is documented to never \
+/// fail; if it does, the crate's own built-in defaults changed \
+/// incompatibly")`, deliberately panicking with a diagnostic message
+/// rather than silently mapping to `NoChannels` or a fabricated fallback
+/// reason — either of those would misrepresent a broken built-in
+/// invariant as an ordinary user-input outcome. A crate-level test
+/// (Config::default() resolves and cannot reach `EmptyChannelAlias`)
+/// already asserts the invariant this `.expect()` depends on; if
+/// GEN-36's own built-in defaults ever changed to violate it, that test
+/// — not a production panic discovered later — is expected to catch it
+/// first. On a
+/// successful `expand_channels()` call (real file or default fallback
+/// alike), an empty `.channels` produces `NoChannels`; otherwise
+/// `Ready { config: adapt(resolved), fallback }`.
 pub(crate) fn resolve_channel_config_from(path: Option<&Path>) -> ChannelConfigResolution;
 
 /// `dirs::home_dir()` joined with `.condarc`, or `None` if the home
@@ -451,6 +528,12 @@ this ticket adds no new fields, variants, or methods to any of them
 ### Structured observability (FR-011)
 
 ```rust
+/// Identifies this event's own field shape to a downstream log
+/// consumer, independent of any other event's schema-version constant
+/// in this codebase (research.md R9) — bumped only if this event's own
+/// fields change shape.
+const CHANNEL_CONFIG_EVENT_SCHEMA_VERSION: &str = "1";
+
 /// FR-011's fallback record: a rejected, unreadable, or unexpandable
 /// `~/.condarc` was treated the same as a missing one, but the condition
 /// itself is recorded, distinct from FR-009's silent missing-file case.
@@ -488,33 +571,53 @@ pub enum FallbackReason {
 }
 
 /// Redacts credential-shaped material from `raw`, then bounds its
-/// length (FR-021). For every substring matching the scheme pattern
-/// `[a-z][a-z0-9]{0,11}://` (same as FR-001(a)) up to the next
-/// whitespace or quote character, removes (a) any `user[:pass]@`
-/// userinfo immediately before the host, and (b) any `/t/<segment>/`
-/// path component — the same two patterns `redact_channel_url()`
-/// (`src/ephemeral/channels.rs`, GEN-24) applies to a single URL, here
-/// applied independently to every matched URL-shaped substring, not
-/// just the first. Text outside a matched substring is left untouched.
+/// length (FR-021). Delegates the redaction itself to this module's own
+/// private `redact_channel_credentials` (below) — applied independently
+/// to every URL-shaped substring `raw` contains, not just the first.
 /// Truncates the result to `MAX_FALLBACK_DETAIL_LEN` at the nearest
 /// UTF-8 character boundary at or before that length. Pure, infallible.
 const MAX_FALLBACK_DETAIL_LEN: usize = 2048;
 fn redact_and_bound(raw: &str) -> String;
 
-/// Constructs and emits one [`ChannelConfigFallbackEvent`], passing
+/// Redacts a single string's worth of credential-shaped material: for
+/// every substring matching the scheme pattern `[a-z][a-z0-9]{0,11}://`
+/// (same as FR-001(a)) up to the next whitespace or quote character,
+/// removes (a) any `user[:pass]@` userinfo immediately before the host,
+/// and (b) any `/t/<segment>/` path component — the same two patterns
+/// `redact_channel_url()` (`src/ephemeral/channels.rs`, GEN-24) applies
+/// to a single URL. Text outside a matched substring is left untouched.
+/// Pure, infallible, no length bound of its own (`redact_and_bound`
+/// applies FR-021's 2048-byte bound on top of this).
+///
+/// This module's own private copy. `crates/condarc` has an
+/// identically-named, identically-behaved private function of its own
+/// (also called `redact_channel_credentials`, used by `ResolvedChannels`'s
+/// `Debug` impl above) — a deliberate second,
+/// independent implementation of the same two patterns, not a shared
+/// one: `allez` cannot expose this as a shared primitive across that
+/// boundary, since `crates/condarc` cannot depend on `allez` (research.md
+/// R7) and the reverse dependency (`allez` calling into a `condarc`-side
+/// helper for a two-line pattern match) would couple this observability
+/// detail to the crate's public surface for no benefit.
+fn redact_channel_credentials(raw: &str) -> String;
+
+/// Constructs and emits one [`ChannelConfigFallbackEvent`] (with
+/// `schema_version: CHANNEL_CONFIG_EVENT_SCHEMA_VERSION`), passing
 /// `detail` through [`redact_and_bound`] first (FR-021).
 fn emit_fallback(reason: FallbackReason, detail: &str);
 ```
 
 This emits through the existing `tracing`/`src/observability.rs` pipeline
-— `tracing::warn!` for `ChannelConfigFallbackEvent` (research.md R9), with structured
-fields, consistent with Constitution XI — no second logging pipeline, no
-new subscriber.
+— `tracing::warn!` for `ChannelConfigFallbackEvent` (research.md R9),
+with `schema_version`, `reason`, and `detail` each emitted as their own
+structured field (mirroring the event struct's own three fields exactly,
+no additional or omitted fields), consistent with Constitution XI — no
+second logging pipeline, no new subscriber.
 
 ## Relationships
 
 ```text
-resolve_channel_config -> ChannelConfigResolution (never fails; always returns a fully-populated variant)
+resolve_channel_config -> ChannelConfigResolution (never fails for any caller-reachable input, one defended internal invariant excepted; always returns a fully-populated variant)
 resolve_channel_config_from(path) -> ChannelConfigResolution
 ChannelConfigResolution::Ready   1---1 ChannelConfig (the `config` field, GEN-24's own unmodified shape, always-empty allow/deny fields)
 ChannelConfigResolution::Ready   1---1 Option<FallbackReason> (the `fallback` field, FR-017/R10/R11)

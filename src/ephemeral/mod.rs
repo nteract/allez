@@ -156,16 +156,27 @@ async fn fail_and_roll_back(
     }
 }
 
-fn emit_success(id: EnvironmentId, operation: &'static str, started: Instant, packages: &[String]) {
+fn emit_outcome(
+    id: EnvironmentId,
+    operation: &'static str,
+    started: Instant,
+    packages: &[String],
+    outcome: &'static str,
+    failure_category: Option<&'static str>,
+) {
     emit_event(&EphemeralLifecycleEvent {
         schema_version: EPHEMERAL_EVENT_SCHEMA_VERSION,
         environment_id: id,
         operation,
         packages: packages.to_vec(),
         duration_ms: elapsed_milliseconds(started),
-        outcome: "success",
-        failure_category: None,
+        outcome,
+        failure_category,
     });
+}
+
+fn emit_success(id: EnvironmentId, operation: &'static str, started: Instant, packages: &[String]) {
+    emit_outcome(id, operation, started, packages, "success", None);
 }
 
 fn emit_failure(
@@ -175,15 +186,14 @@ fn emit_failure(
     packages: &[String],
     error: &EphemeralEnvError,
 ) {
-    emit_event(&EphemeralLifecycleEvent {
-        schema_version: EPHEMERAL_EVENT_SCHEMA_VERSION,
-        environment_id: id,
+    emit_outcome(
+        id,
         operation,
-        packages: packages.to_vec(),
-        duration_ms: elapsed_milliseconds(started),
-        outcome: "failure",
-        failure_category: Some(CategorizedError::category(error)),
-    });
+        started,
+        packages,
+        "failure",
+        Some(CategorizedError::category(error)),
+    );
 }
 
 fn elapsed_milliseconds(started: Instant) -> u64 {

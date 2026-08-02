@@ -31,14 +31,11 @@ pub fn expand_channels(config: &Config) -> Result<ResolvedChannels, ExpandChanne
 
 ```rust
 #[non_exhaustive]
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedChannels {
     pub channels: Vec<String>,
     pub channel_priority: ChannelPriority,
 }
-
-impl std::fmt::Debug for ResolvedChannels { /* redacts URL userinfo/access-token
-    material in `channels` before printing — see data-model.md */ }
 
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,11 +92,7 @@ carries separate `allowlist_channels`/`denylist_channels` fields — see
   data itself.** This function does not strip or otherwise touch URL
   userinfo or a `/t/<token>/` segment in `channels`' values — that kind
   of stripping is out of this ticket's scope, deferred to GEN-29's own
-  approach. `ResolvedChannels`'s own `Debug` impl redacts both patterns
-  before printing (data-model.md) so a test failure, panic message, or
-  incidental `{:?}` logging call doesn't leak them — that redaction is a
-  presentation-layer safeguard only, not a claim that the returned
-  `channels` values themselves are credential-free.
+  approach.
 - **`override_channels_enabled` has no effect on the output** (FR-006) —
   `expand_channels()` does not read that field at all.
 - **No deduplication pass of its own** (FR-007) — a coincidental repeat

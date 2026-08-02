@@ -55,6 +55,7 @@ pub fn resolve_channel_config() -> ChannelConfigResolution;
 /// for the full type definition and research.md R13 for why this is an
 /// enum rather than a struct.
 #[non_exhaustive]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ChannelConfigResolution {
     /// A resolution that produced at least one usable channel, whether
     /// from a real, populated `~/.condarc` or from conda's own
@@ -118,9 +119,9 @@ pub use events::FallbackReason;
   | `~/.condarc` state | Result | `config` | Observability | `fallback` (FR-017) |
   |---|---|---|---|---|
   | Absent | `Ready` | Conda's documented defaults (`condarc::expand_channels(&Config::default())`, always non-empty) | None (FR-009) | `None` |
-  | Present, `condarc::parse` rejects it | `Ready` | Same as absent | `ChannelConfigFallbackEvent { reason: Rejected, detail: <redacted, length-bounded ValidationReport text> }` (FR-011/FR-021) | `Some(FallbackReason::Rejected)` |
-  | Present, unreadable (OS permission/I-O error) | `Ready` | Same as absent | `ChannelConfigFallbackEvent { reason: Unreadable, detail: <redacted, length-bounded io::Error text> }` (FR-011/FR-021) | `Some(FallbackReason::Unreadable)` |
-  | Present, parses, but `condarc::expand_channels` returns `Err` (FR-018) | `Ready` | Same as absent | `ChannelConfigFallbackEvent { reason: Rejected, detail: <redacted, length-bounded ExpandChannelsError text> }` (FR-011/FR-021, `Rejected` broadened per research.md R11) | `Some(FallbackReason::Rejected)` |
+  | Present, `condarc::parse` rejects it | `Ready` | Same as absent | `ChannelConfigFallbackEvent { reason: Rejected, detail: <ValidationReport text> }` (FR-011) | `Some(FallbackReason::Rejected)` |
+  | Present, unreadable (OS permission/I-O error) | `Ready` | Same as absent | `ChannelConfigFallbackEvent { reason: Unreadable, detail: <io::Error text> }` (FR-011) | `Some(FallbackReason::Unreadable)` |
+  | Present, parses, but `condarc::expand_channels` returns `Err` (FR-018) | `Ready` | Same as absent | `ChannelConfigFallbackEvent { reason: Rejected, detail: <ExpandChannelsError text> }` (FR-011, `Rejected` broadened per research.md R11) | `Some(FallbackReason::Rejected)` |
   | Present, parses and expands successfully, `channels` non-empty | `Ready` | `adapt(condarc::expand_channels(&config)?)` | None (FR-009, ordinary success) | `None` |
   | Present, parses and expands successfully, `channels` empty (FR-019 filtering removed every entry, or the configuration otherwise resolves to an empty list) | `NoChannels` | — no `ChannelConfig` constructed (FR-020) | None (a successful resolution, not a fallback) | — no `fallback` field on this variant |
 
@@ -128,15 +129,9 @@ pub use events::FallbackReason;
   calls `std::fs::read_to_string` (or an equivalent read-only primitive)
   against the resolved path; no write, rename, or delete of any kind.
 - **Embedded credential material passes through unchanged** in the
-  resolved channel identifiers themselves — this ticket's own scope does
-  not strip or transform them. The one exception is the fallback
-  observability event's own `detail` field, which is redacted and
-  length-bounded before emission (FR-021) — a property of this ticket's
-  own new observability record, not of the resolved channel identifiers
-  themselves. `ResolvedChannels`'s own `Debug` output redacts the same
-  two patterns independently, as a presentation-only safeguard against
-  incidental printing (data-model.md) — this too does not change the
-  `channels` values themselves.
+  resolved channel identifiers themselves, and in the fallback
+  observability event's own `detail` field — this ticket's own scope
+  does not strip or transform any of it.
 - **Adaptation is lossless and field-by-field** (FR-012/SC-001): the
   returned `ChannelConfig`'s `channels`/`channel_priority` fields are
   populated directly from `condarc::ResolvedChannels`'s two corresponding

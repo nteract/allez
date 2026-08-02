@@ -37,15 +37,8 @@ type remains structurally required.
 /// type (research.md R12) — they exist only inside `expand_channels()`'s
 /// own implementation.
 ///
-/// Does **not** derive `Debug`: `channels` entries come directly from
-/// `~/.condarc` and can embed URL userinfo (`user:pass@`) or an
-/// access-token path segment (`/t/<token>/`, the same shapes FR-021's
-/// observability redaction targets). A derived `Debug` would print those
-/// credentials verbatim in any test failure, panic message, or
-/// downstream `{:?}` logging call. The manual impl below redacts the
-/// same two patterns before printing.
 #[non_exhaustive]
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedChannels {
     /// Ordered, concrete channel identifiers (see Concrete Channel
     /// Identifier in spec.md), preserving `channels`'/`default_channels`'
@@ -60,55 +53,11 @@ pub struct ResolvedChannels {
     /// (research.md R2).
     pub channel_priority: ChannelPriority,
 }
-
-impl std::fmt::Debug for ResolvedChannels {
-    /// Redacts each `channels` entry through `redact_channel_credentials`
-    /// (defined below, this crate's own private copy — see that
-    /// function's own doc comment for why it cannot be the same
-    /// implementation `allez`'s `redact_and_bound` uses), then renders
-    /// the ordinary derived-style output. Applied per-entry, independent
-    /// of FR-021's own 2048-byte bound — this impl has no length limit
-    /// of its own, since a `Debug` dump of a resolved channel list is
-    /// not the untrusted-text-in-a-log-line case FR-021 addresses.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ResolvedChannels")
-            .field(
-                "channels",
-                &self.channels.iter().map(|c| redact_channel_credentials(c)).collect::<Vec<_>>(),
-            )
-            .field("channel_priority", &self.channel_priority)
-            .finish()
-    }
-}
-
-/// This crate's own private redaction primitive, used only by
-/// `ResolvedChannels`'s `Debug` impl above: for every substring matching
-/// the scheme pattern `[a-z][a-z0-9]{0,11}://` (same as FR-001(a)) up to
-/// the next whitespace or quote character, removes (a) any
-/// `user[:pass]@` userinfo immediately before the host, and (b) any
-/// `/t/<segment>/` path component. Text outside a matched substring is
-/// left untouched. Pure, infallible, no length bound.
-///
-/// `allez` has an identically-named, identically-behaved private
-/// function of its own (`redact_channel_credentials`, Structured
-/// observability, below) — a deliberate second, independent
-/// implementation of the same two redaction patterns, not a shared one:
-/// `crates/condarc` cannot depend on `allez` (research.md R7), the same
-/// reason FR-019's deny-then-allow filtering exists as two independent
-/// implementations rather than one shared call (research.md R12).
-fn redact_channel_credentials(raw: &str) -> String;
 ```
 
 `#[non_exhaustive]` matches every other public enum/struct GEN-36
 established in this crate, and leaves room for a future additive field
 without a breaking change.
-
-`ResolvedChannels`'s `Debug` redaction is a design-level defense-in-depth
-safeguard, not a formal requirement — spec.md's own redaction
-requirement (FR-021) is scoped to the fallback-observability `detail`
-text only. This safeguard exists so a value that already flows through
-this ticket's code doesn't leak credentials through an incidental
-`{:?}` print, independent of whether spec.md ever asks for it.
 
 ### `ExpandChannelsError`
 
@@ -540,15 +489,12 @@ const CHANNEL_CONFIG_EVENT_SCHEMA_VERSION: &str = "1";
 struct ChannelConfigFallbackEvent {
     schema_version: &'static str,
     reason: FallbackReason,
-    /// A redacted, length-bounded rendering (FR-021, `redact_and_bound`
-    /// below) of the crate's own per-problem detail: `ValidationReport`'s
+    /// The crate's own per-problem detail: `ValidationReport`'s
     /// `Display` text for `FallbackReason::Rejected` from a `parse()`
     /// rejection, or `ExpandChannelsError`'s own `Display` text for
     /// `FallbackReason::Rejected` from an `expand_channels()` failure
     /// (FR-018/research.md R11 — both share the one variant); the
     /// `io::Error`'s own `Display` text for `FallbackReason::Unreadable`.
-    /// Owned rather than borrowed, since redaction/bounding produces a
-    /// new string rather than a view into the source text.
     detail: String,
 }
 
@@ -570,40 +516,8 @@ pub enum FallbackReason {
     Unreadable,
 }
 
-/// Redacts credential-shaped material from `raw`, then bounds its
-/// length (FR-021). Delegates the redaction itself to this module's own
-/// private `redact_channel_credentials` (below) — applied independently
-/// to every URL-shaped substring `raw` contains, not just the first.
-/// Truncates the result to `MAX_FALLBACK_DETAIL_LEN` at the nearest
-/// UTF-8 character boundary at or before that length. Pure, infallible.
-const MAX_FALLBACK_DETAIL_LEN: usize = 2048;
-fn redact_and_bound(raw: &str) -> String;
-
-/// Redacts a single string's worth of credential-shaped material: for
-/// every substring matching the scheme pattern `[a-z][a-z0-9]{0,11}://`
-/// (same as FR-001(a)) up to the next whitespace or quote character,
-/// removes (a) any `user[:pass]@` userinfo immediately before the host,
-/// and (b) any `/t/<segment>/` path component — the same two patterns
-/// `redact_channel_url()` (`src/ephemeral/channels.rs`, GEN-24) applies
-/// to a single URL. Text outside a matched substring is left untouched.
-/// Pure, infallible, no length bound of its own (`redact_and_bound`
-/// applies FR-021's 2048-byte bound on top of this).
-///
-/// This module's own private copy. `crates/condarc` has an
-/// identically-named, identically-behaved private function of its own
-/// (also called `redact_channel_credentials`, used by `ResolvedChannels`'s
-/// `Debug` impl above) — a deliberate second,
-/// independent implementation of the same two patterns, not a shared
-/// one: `allez` cannot expose this as a shared primitive across that
-/// boundary, since `crates/condarc` cannot depend on `allez` (research.md
-/// R7) and the reverse dependency (`allez` calling into a `condarc`-side
-/// helper for a two-line pattern match) would couple this observability
-/// detail to the crate's public surface for no benefit.
-fn redact_channel_credentials(raw: &str) -> String;
-
 /// Constructs and emits one [`ChannelConfigFallbackEvent`] (with
-/// `schema_version: CHANNEL_CONFIG_EVENT_SCHEMA_VERSION`), passing
-/// `detail` through [`redact_and_bound`] first (FR-021).
+/// `schema_version: CHANNEL_CONFIG_EVENT_SCHEMA_VERSION`).
 fn emit_fallback(reason: FallbackReason, detail: &str);
 ```
 

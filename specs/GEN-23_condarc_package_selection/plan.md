@@ -32,7 +32,7 @@ tested under this one ticket (spec.md Operating Context):
    GEN-24 together directly, deciding for itself whether to warn or
    proceed on either signal.
 
-Full design rationale for both parts lives in `research.md` (R1–R15);
+Full design rationale for both parts lives in `research.md` (R1–R14);
 this plan covers scope, structure, and the constitution gate only.
 
 **Cleanup boundary (per spec.md Assumptions)**: this plan makes no
@@ -96,9 +96,7 @@ missing/malformed/unreadable/unexpandable `~/.condarc` (FR-009/FR-011),
 and never hands GEN-24 an intentionally-empty `ChannelConfig` (FR-020).
 Embedded credential material in the resolved channel identifiers
 themselves passes through unchanged — out of this ticket's scope,
-deferred to GEN-29's own approach; `ResolvedChannels`'s own `Debug`
-impl redacts it independently, as a presentation-layer safeguard only
-(data-model.md). `~/.condarc` is never written
+deferred to GEN-29's own approach. `~/.condarc` is never written
 to (FR-013); resolution is always fresh (FR-015); neither half alters
 `parse()`'s or GEN-24's existing behavior (Operating Context #1,
 FR-016).
@@ -119,13 +117,13 @@ as-is).
 | I. Code Quality | PASS | Two new, single-responsibility module additions, each file mapping to one of `research.md`'s decisions. No `unsafe` code anywhere in this ticket's scope. |
 | II. Testing Standards | PASS (one documented exception — see Complexity Tracking) | TDD throughout; see `research.md` § Test strategy for the full test-file breakdown. The one exception is the public, zero-argument `resolve_channel_config()` wrapper itself, which has no automated integration test (research.md R8). |
 | III. Dual-Primary Interface | N/A (justified) | Neither half ships a CLI subcommand (GEN-25's job). Both public functions return fully-typed values for GEN-25 to consume later. |
-| IV. DRY | PASS | Reuses `Config`'s already-coerced `channel_priority` (research.md R2) rather than re-implementing GEN-36's coercion. `expand_channels()`'s deny-then-allow filtering (FR-019) is a second, independent implementation of the policy `allez`'s `filter_channels()` (GEN-24) applies — necessarily independent, since the crate can't depend on `allez` — not a DRY violation of GEN-24's own codebase (research.md R12, spec.md Assumptions). `ResolvedChannels`'s credential redaction similarly has three independent implementations of the same two redaction patterns: GEN-24's `redact_channel_url()`, `allez`'s own `redact_channel_credentials`, and `crates/condarc`'s own `redact_channel_credentials`. The condarc/allez pair is separated by dependency direction, the same as the filtering case (research.md R14). The GEN-24/allez pair is both inside `allez` and separated instead by input shape — `redact_channel_url()` takes one already-known-to-be-a-URL value, `redact_channel_credentials` takes free-form text that may embed zero, one, or many (research.md R9). No undocumented exception remains. |
-| V. Explicit Over Implicit | PASS | `resolve_channel_config`/`_from` are total for every caller-reachable `~/.condarc` state, one defended internal invariant excepted (research.md R15); `ChannelConfigResolution`'s `NoChannels` variant makes "legitimately zero channels" a distinct, matchable case rather than an ambiguous empty `ChannelConfig` (research.md R13). `expand_channels()` itself is fallible (research.md R11) with a named `Err` variant, not a sentinel. Fallback paths use explicit `ReadOutcome`/`FallbackReason` enums, never `io::Error::kind()` inspection at the call site. Default constants are named (research.md R4). |
+| IV. DRY | PASS | Reuses `Config`'s already-coerced `channel_priority` (research.md R2) rather than re-implementing GEN-36's coercion. `expand_channels()`'s deny-then-allow filtering (FR-019) is a second, independent implementation of the policy `allez`'s `filter_channels()` (GEN-24) applies — necessarily independent, since the crate can't depend on `allez` — not a DRY violation of GEN-24's own codebase (research.md R12, spec.md Assumptions). No undocumented exception remains. |
+| V. Explicit Over Implicit | PASS | `resolve_channel_config`/`_from` are total for every caller-reachable `~/.condarc` state, one defended internal invariant excepted (research.md R14); `ChannelConfigResolution`'s `NoChannels` variant makes "legitimately zero channels" a distinct, matchable case rather than an ambiguous empty `ChannelConfig` (research.md R13). `expand_channels()` itself is fallible (research.md R11) with a named `Err` variant, not a sentinel. Fallback paths use explicit `ReadOutcome`/`FallbackReason` enums, never `io::Error::kind()` inspection at the call site. Default constants are named (research.md R4). |
 | VI. Documentation and Type Safety | PASS | Every new public item gets a doc comment per `data-model.md`/`contracts/*.md`; `ReadOutcome` is a closed enum, `FallbackReason`/`ExpandChannelsError`/`ChannelConfigResolution` are all `#[non_exhaustive]`. `cargo doc --no-deps` must warn zero (implementation-time verification). |
 | VII. No Hardcoded Values | PASS | `~/.condarc`'s location resolves via `dirs::home_dir()` (research.md R7), never a hand-rolled env-var lookup. Default constants are named, not inline literals. |
-| VIII. Mandatory 100% Spec Test Coverage | PASS (planned) | Covers all 3 user stories and SC-001 through SC-007, and every FR. |
+| VIII. Mandatory 100% Spec Test Coverage | PASS (planned) | Covers all 3 user stories and SC-001 through SC-006, and every FR. |
 | IX. Determinism & Idempotency | PASS (one documented exception — see Complexity Tracking) | `expand_channels()` is pure. `resolve_channel_config` intentionally is not (fresh disk read every call, FR-015). |
-| X. Security & Supply-Chain Integrity | PASS | `dirs` already present transitively, no new supply-chain surface; promoting it to a direct dependency still requires the standard `cargo audit`/`cargo deny check` gates like any other manifest change. Embedded credential material in the resolved channel identifiers themselves passes through unchanged — out of this ticket's scope, deferred to GEN-29's own approach; `ResolvedChannels`'s own `Debug` impl redacts it independently as a presentation-layer safeguard (data-model.md), and the one new observability event this ticket adds redacts and length-bounds its own `detail` field (FR-021). |
+| X. Security & Supply-Chain Integrity | PASS | `dirs` already present transitively, no new supply-chain surface; promoting it to a direct dependency still requires the standard `cargo audit`/`cargo deny check` gates like any other manifest change. Embedded credential material in the resolved channel identifiers themselves passes through unchanged — out of this ticket's scope, deferred to GEN-29's own approach. |
 | XI. Structured Observability | PASS | One new `tracing`-emitted event shape (`ChannelConfigFallbackEvent`, research.md R9), through the existing subscriber, no second logging pipeline. |
 
 No constitution violations requiring justification beyond the two,
@@ -172,12 +170,10 @@ crates/condarc/
     ├── parse.rs            # existing — untouched
     ├── validate.rs         # existing — untouched
     └── expand_channels.rs  # NEW — expand_channels() -> Result<ResolvedChannels, ExpandChannelsError>,
-                             #       ResolvedChannels (with its own manual, credential-redacting
-                             #       `Debug` impl and private `redact_channel_credentials` helper),
-                             #       ExpandChannelsError, and the private
+                             #       ResolvedChannels, ExpandChannelsError, and the private
                              #       resolve_entry/resolve_member/match_custom_channel/
                              #       apply_allow_deny/ResolveContext helpers
-                             #       (research.md R1/R5/R6/R11/R12/R14; data-model.md)
+                             #       (research.md R1/R5/R6/R11/R12; data-model.md)
 
 crates/condarc/tests/
 ├── public_api_usage.rs    # existing — untouched
@@ -219,8 +215,7 @@ src/
                                   #       plus the argument-level None case (6 tests total,
                                   #       one of which also covers SC-005's EmptyChannelAlias
                                   #       fallback), SC-004's observability-capture test group,
-                                  #       SC-006's NoChannels test, SC-007's end-to-end
-                                  #       redacted-detail assertion, the non-filtering-caused
+                                  #       SC-006's NoChannels test, the non-filtering-caused
                                   #       NoChannels case, and FR-013/FR-014/FR-015's
                                   #       never-mutates/unknown-key/no-caching tests
                                   #       — unit tests, not integration tests, since that
@@ -236,19 +231,12 @@ src/
                                   #       one added once allow/deny filtering exists) —
                                   #       a unit test, not an integration
                                   #       test, since `adapt()` is private (research.md R8)
-     └── events.rs                 # ChannelConfigFallbackEvent shape,
-                                  #       redact_and_bound()/redact_channel_credentials()
-                                  #       (this module's own private redaction
-                                  #       implementation, independent of the
-                                  #       identically-named one in
-                                  #       `crates/condarc/src/expand_channels.rs` —
-                                  #       research.md R7/R9),
-                                  #       and tracing emission (FR-011/FR-021). Also holds
-                                  #       the co-located #[cfg(test)] module driving
-                                  #       redact_and_bound() directly: SC-007's redaction
-                                  #       and truncation cases, and emit_fallback() directly:
-                                  #       its own unit test asserting the emitted event's
-                                  #       three fields exactly (research.md Test strategy)
+     └── events.rs                 # ChannelConfigFallbackEvent shape and tracing
+                                  #       emission (FR-011). Also holds the co-located
+                                  #       #[cfg(test)] module driving emit_fallback()
+                                  #       directly: its own unit test asserting the
+                                  #       emitted event's three fields exactly
+                                  #       (research.md Test strategy)
 
 tests/
 ├── cli_scaffold.rs          # existing — untouched
@@ -257,7 +245,7 @@ tests/
 ├── fixtures/                 # existing — untouched
 └── support/                  # existing — untouched
                                      # no new file here — SC-001, SC-002, SC-004,
-                                     #       SC-005, SC-006, and SC-007 are all co-located
+                                     #       SC-005, and SC-006 are all co-located
                                      #       unit tests (research.md R8); there is no
                                      #       automated-test need this ticket adds that a
                                      #       `tests/` integration test could serve

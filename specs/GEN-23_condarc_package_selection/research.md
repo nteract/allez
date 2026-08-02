@@ -340,11 +340,10 @@ Every other `allez`-level scenario test stays on the path-injectable
 internal function (SC-002's five file states plus the argument-level
 `None` case, six tests total, one of which also covers SC-005's own
 `allez`-level case; the SC-004 observability-capture group — 3
-fallback-path cases plus the FR-009 zero-events negative case, 4
-dedicated tests — plus SC-006's own dedicated case, SC-007's
-end-to-end redacted-detail assertion; and FR-013's
-never-mutates, FR-014's unknown-key-tolerance, FR-015's no-caching, and
-the non-filtering-caused `NoChannels` case, one dedicated test each).
+  fallback-path cases plus the FR-009 zero-events negative case, 4
+  dedicated tests — plus SC-006's own dedicated case; and FR-013's
+  never-mutates, FR-014's unknown-key-tolerance, FR-015's no-caching, and
+  the non-filtering-caused `NoChannels` case, one dedicated test each).
 SC-003's
 22 scenarios are not part of this `allez`-level accounting at all — they
 are crate-level tests of `condarc::expand_channels()` itself, in
@@ -371,24 +370,7 @@ branching logic worth an automated test.
   (`FallbackReason::Rejected` | `FallbackReason::Unreadable`, promoted to
   `pub` by R10), `detail` — the crate's own per-problem
   `ValidationReport::to_string()` for `FallbackReason::Rejected`, or the `io::Error`'s
-  own `Display` text for `FallbackReason::Unreadable` — passed through
-  `redact_and_bound(&str) -> String` before construction (FR-021).
-  `redact_and_bound` delegates the actual redaction to this module's own
-  private `redact_channel_credentials` (R14), then bounds the result:
-  every substring matching the FR-001(a) scheme pattern has its userinfo
-  and `/t/<segment>/` path component stripped (the same two patterns
-  `redact_channel_url()`, `src/ephemeral/channels.rs`, GEN-24, already
-  applies to a single URL, here applied independently to every matched
-  substring in free-form text, not just the first), then the result is
-  truncated to `MAX_FALLBACK_DETAIL_LEN` (2048 bytes, data-model.md) at
-  the nearest UTF-8 character boundary. Not a call into
-  `redact_channel_url()` itself — that function's own signature takes
-  one already-known-to-be-a-URL value, not a free-form string that may
-  embed zero, one, or more of them — so this module's `redact_channel_credentials`
-  is a second, independent implementation for a different input shape,
-  the same pattern R12 already establishes for `filter_channels()`'s
-  policy (and, per R14, the same pattern this ticket's `crates/condarc`
-  side also uses independently, for a different consumer).
+  own `Display` text for `FallbackReason::Unreadable`.
 
 Emitted via `tracing::warn!` (a fallback is a recovered problem,
 warranting attention) through the existing `src/observability.rs`
@@ -593,36 +575,7 @@ this one call earlier is not optional once R12 moves filtering into
   success, not a failure to compute one; conflating the two would make
   `ExpandChannelsError` (R11) mean two unrelated things.
 
-## R14 — `ResolvedChannels` does not derive `Debug`; its own private `redact_channel_credentials` is a second, independent implementation of R9's redaction patterns
-
-**Decision**: `ResolvedChannels` (`crates/condarc`) derives
-`Clone, PartialEq, Eq` but not `Debug`. Its manual `Debug` impl
-(data-model.md) redacts each `channels` entry through a private
-`redact_channel_credentials` function declared in the same file,
-applying the same two patterns R9's `redact_and_bound` applies (URL
-userinfo, `/t/<segment>/`), before rendering the ordinary derived-style
-output.
-
-**Rationale**: `channels` entries come directly from `~/.condarc` and
-can embed the same credential shapes FR-021 already redacts out of
-observability text. A derived `Debug` would print them verbatim in any
-test failure, panic message, or incidental `{:?}` logging call.
-`redact_and_bound`'s own `redact_channel_credentials` (`allez`,
-`src/channel_config/events.rs`) cannot be called from here: `crates/condarc`
-has no dependency on `allez` (R7). The two functions are therefore a
-second, independent implementation of the same redaction patterns, not
-a shared one — the same pattern R12 already establishes for
-`filter_channels()`'s policy.
-
-**Alternatives considered**:
-- *Keep the derived `Debug` and rely on callers not to print `channels`
-  carelessly* — rejected: nothing enforces that, and the type is public.
-- *Make the redaction function `pub` in `condarc` and have `allez` call
-  it* — rejected: it would make `redact_and_bound` depend on `condarc`
-  for a two-line pattern match, coupling an `allez`-internal
-  observability detail to the crate's public surface for no benefit.
-
-## R15 — `resolve_channel_config_from`'s internal `Config::default()` fallback call is defended by an explicit invariant, not left as an unstated `Err` arm
+## R14 — `resolve_channel_config_from`'s internal `Config::default()` fallback call is defended by an explicit invariant, not left as an unstated `Err` arm
 
 **Decision**: The internal call to `condarc::expand_channels(&Config::default())`
 (the path every non-`Ready`-from-real-file case routes through) unwraps
@@ -658,8 +611,7 @@ violation of this invariant, before it ever reached this call site.
 - **Crate-level** (`crates/condarc/`): unit tests co-located in
   `expand_channels.rs` for each of R5/R6/R12's crate-private helpers
   (`resolve_entry`, `resolve_member`, the progressive-prefix matcher,
-  `apply_allow_deny`),
-  plus R14's `redact_channel_credentials`/`Debug`-impl test; a
+  `apply_allow_deny`); a
   new integration test file, `crates/condarc/tests/expand_channels_scenarios.rs`,
   mapping every one of SC-003's 22 named scenarios to one `#[test]` each
   with hand-authored `.condarc` YAML strings, plus SC-005's own
@@ -700,13 +652,9 @@ violation of this invariant, before it ever reached this call site.
   SC-005's
   `allez`-level half (the crate's `Err` triggering the rejected-equivalent
   fallback) lives alongside the other `resolve_channel_config_from`-driven
-  tests. SC-007 is a co-located unit test in `src/channel_config/events.rs`
-  itself (not `mod.rs`), calling `redact_and_bound` directly for the
-  redaction and truncation cases, plus one `resolve_channel_config_from`-driven
-  end-to-end assertion in `mod.rs` confirming the emitted event's
-  `detail` is already redacted. `events.rs` also holds its own
+  tests. `events.rs` also holds its own
   co-located `emit_fallback()` unit test, asserting the captured event
-  carries exactly `reason`, `schema_version`, and the already-redacted
+  carries exactly `reason`, `schema_version`, and
   `detail` — no additional or omitted fields. There is deliberately no automated test
   of the public,
   zero-argument `resolve_channel_config()` wrapper against a real

@@ -143,7 +143,7 @@ target platforms per the workspace's own CI matrix.
   `EmptyChannelAlias` `Err` branch (`channel_alias` defaults to the
   non-empty built-in alias, FR-002).
 
-### `allez` (`resolve_channel_config`, User Story 2, SC-001/SC-002/SC-004/SC-005/SC-006/SC-007)
+### `allez` (`resolve_channel_config`, User Story 2, SC-001/SC-002/SC-004/SC-005/SC-006)
 
 - **FR-010** — satisfied by construction, not a dedicated test: every
   test in this section exercises the real `condarc::parse` and real
@@ -228,19 +228,6 @@ target platforms per the workspace's own CI matrix.
   `denylist_channels` involved — asserts the same `NoChannels` result,
   covering FR-020's other legitimate cause (spec.md Design Decisions,
   "Empty resolved list, two legitimate causes").
-- **SC-007** — a URL userinfo segment or an access-token path
-  segment embedded in a URL-shaped substring (including a case with two
-  such URLs embedded in the same detail text) asserts the emitted
-  `ChannelConfigFallbackEvent.detail` no longer contains either (FR-021); a separate case supplies a detail
-  text longer than `MAX_FALLBACK_DETAIL_LEN` (2048 bytes) and asserts
-  the emitted value is truncated to it, at a valid UTF-8 boundary. Both
-  are co-located unit tests in `src/channel_config/events.rs`, calling
-  `redact_and_bound` directly and, separately, asserting the same
-  property end-to-end through `resolve_channel_config_from`'s own
-  per-test-scoped `tracing::subscriber::with_default` capture, driven
-  against a **rejected** `.condarc` fixture — never an unreadable one,
-  whose `detail` is `io::Error`'s own `Display` text and never carries
-  `.condarc` content to redact.
 - **FR-013** — after any `resolve_channel_config_from` call against a
   real file (each of SC-002's four file-exists states: populated,
   rejected, unreadable, expansion-failing), the file's own modification
@@ -302,9 +289,7 @@ exists or configures none explicitly) — and the effective
 channel-priority mode, with no raw credential material ever printed,
 even if the running machine's own `~/.condarc` happens to contain any
 (`ChannelSpec::Debug`, GEN-24's own existing defense-in-depth, redacts
-it regardless of this ticket's scope; `ResolvedChannels`'s own `Debug`
-impl applies the same redaction independently one layer earlier,
-data-model.md). If the machine's own
+it regardless of this ticket's scope). If the machine's own
 `~/.condarc`'s allow/deny filtering (FR-019) legitimately removes every
 channel, this prints the distinct `NoChannels` message above instead of
 an empty list (FR-020) — one of two legitimate causes of an

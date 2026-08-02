@@ -1,8 +1,7 @@
 use std::collections::BTreeSet;
 
-use allez::ephemeral::{
-    ChannelPriorityMode, DEFAULT_PACKAGES, RequestedPackages, create_ephemeral_environment,
-};
+use allez::ephemeral::{DEFAULT_PACKAGES, RequestedPackages, create_ephemeral_environment};
+use condarc::ChannelPriority;
 
 use crate::support::{TestContext, package_specs, root_fixture_config};
 
@@ -27,7 +26,7 @@ async fn no_packages_with_an_override_installs_the_override_instead_of_defaults(
     // When
     let ready = create_ephemeral_environment(
         RequestedPackages::UseDefaultOrOverride,
-        root_fixture_config(ChannelPriorityMode::Strict),
+        root_fixture_config(ChannelPriority::Strict),
         Some(override_packages),
     )
     .await
@@ -53,7 +52,7 @@ async fn explicit_packages_alongside_an_override_ignore_the_override_entirely() 
     // When
     let ready = create_ephemeral_environment(
         package_specs(&["fixture-default-alpha"]),
-        root_fixture_config(ChannelPriorityMode::Strict),
+        root_fixture_config(ChannelPriority::Strict),
         Some(override_packages),
     )
     .await
@@ -75,7 +74,7 @@ async fn an_override_resolving_to_empty_falls_back_to_default_packages() {
     // When
     let ready = create_ephemeral_environment(
         RequestedPackages::UseDefaultOrOverride,
-        root_fixture_config(ChannelPriorityMode::Strict),
+        root_fixture_config(ChannelPriority::Strict),
         Some(Vec::new()),
     )
     .await

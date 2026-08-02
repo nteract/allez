@@ -1,9 +1,7 @@
 use std::{collections::BTreeSet, process::Command};
 
-use allez::ephemeral::{
-    ChannelConfig, ChannelPriorityMode, DEFAULT_PACKAGES, RequestedPackages,
-    create_ephemeral_environment,
-};
+use allez::ephemeral::{DEFAULT_PACKAGES, RequestedPackages, create_ephemeral_environment};
+use condarc::{ChannelPriority, ResolvedChannels};
 
 use crate::support::{
     EventCapture, TestContext, fixture_channel, package_specs, root_fixture_config,
@@ -19,7 +17,7 @@ async fn resolvable_packages_are_installed_and_the_probe_is_usable() {
     // When
     let ready = create_ephemeral_environment(
         package_specs(&requested),
-        root_fixture_config(ChannelPriorityMode::Strict),
+        root_fixture_config(ChannelPriority::Strict),
         None,
     )
     .await
@@ -51,7 +49,7 @@ async fn empty_package_list_installs_built_in_defaults() {
     // When
     let ready = create_ephemeral_environment(
         RequestedPackages::Explicit(Vec::new()),
-        root_fixture_config(ChannelPriorityMode::Strict),
+        root_fixture_config(ChannelPriority::Strict),
         None,
     )
     .await
@@ -75,7 +73,7 @@ async fn flexible_channel_priority_solves_successfully() {
     // When
     let ready = create_ephemeral_environment(
         package_specs(&["fixture-probe"]),
-        root_fixture_config(ChannelPriorityMode::Flexible),
+        root_fixture_config(ChannelPriority::Flexible),
         None,
     )
     .await
@@ -90,7 +88,7 @@ async fn flexible_channel_priority_solves_successfully() {
 async fn strict_channel_priority_selects_the_first_channels_version() {
     // Given
     let _context = TestContext::new("strict-priority-order");
-    let config = ChannelConfig::from_urls(vec![
+    let config = ResolvedChannels::from_channels(vec![
         fixture_channel("priority-a"),
         fixture_channel("priority-b"),
     ]);
@@ -115,7 +113,7 @@ async fn lifecycle_events_include_consistent_ids_packages_and_durations() {
     // When
     let ready = create_ephemeral_environment(
         package_specs(&["fixture-probe"]),
-        root_fixture_config(ChannelPriorityMode::Strict),
+        root_fixture_config(ChannelPriority::Strict),
         None,
     )
     .await
@@ -123,7 +121,7 @@ async fn lifecycle_events_include_consistent_ids_packages_and_durations() {
     let successful_id = ready.id.to_string();
     let failure = create_ephemeral_environment(
         package_specs(&["fixture-corrupt-checksum"]),
-        root_fixture_config(ChannelPriorityMode::Strict),
+        root_fixture_config(ChannelPriority::Strict),
         None,
     )
     .await
@@ -163,7 +161,7 @@ async fn a_solve_stage_failure_still_emits_an_install_failure_event() {
     // When
     let failure = create_ephemeral_environment(
         package_specs(&["fixture-does-not-exist"]),
-        root_fixture_config(ChannelPriorityMode::Strict),
+        root_fixture_config(ChannelPriority::Strict),
         None,
     )
     .await
@@ -190,14 +188,14 @@ async fn a_solve_stage_failure_still_emits_an_install_failure_event() {
 #[cfg(feature = "network-tests")]
 #[tokio::test(flavor = "current_thread")]
 #[serial_test::serial]
-async fn empty_channels_fallback_resolves_against_real_defaults_channel() {
+async fn resolved_defaults_channel_installs_a_real_package() {
     // Given
     let _context = TestContext::new("real-defaults-channel");
 
     // When
     let ready = create_ephemeral_environment(
         package_specs(&["zlib"]),
-        ChannelConfig::from_urls(Vec::new()),
+        ResolvedChannels::from_channels(vec!["https://repo.anaconda.com/pkgs/main".to_string()]),
         None,
     )
     .await

@@ -10,11 +10,13 @@
 mod catalog;
 mod coerce;
 mod error;
+mod expand_channels;
 mod model;
 mod parse;
 mod validate;
 
 pub use error::{ErrorEntry, ErrorKind, InputRepr, Location, PathSegment, ValidationReport};
+pub use expand_channels::{ExpandChannelsError, ResolvedChannels, expand_channels};
 pub use model::{
     BoolOrInt, ChannelPriority, ChannelSetting, Config, ListField, ParseOptions, PathConflict,
     SafetyChecks, SatSolver, SslVerify,

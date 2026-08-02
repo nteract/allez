@@ -5,9 +5,8 @@
 //! usable, until [`reap_ephemeral_environments`] is called explicitly,
 //! which removes every environment it finds unconditionally.
 
-use allez::ephemeral::{
-    ChannelPriorityMode, ReapOutcome, create_ephemeral_environment, reap_ephemeral_environments,
-};
+use allez::ephemeral::{ReapOutcome, create_ephemeral_environment, reap_ephemeral_environments};
+use condarc::ChannelPriority;
 
 use crate::support::{EventCapture, TestContext, package_specs, root_fixture_config};
 
@@ -20,7 +19,7 @@ async fn a_ready_environment_is_not_torn_down_on_its_own() {
     // When
     let ready = create_ephemeral_environment(
         package_specs(&["fixture-probe"]),
-        root_fixture_config(ChannelPriorityMode::Strict),
+        root_fixture_config(ChannelPriority::Strict),
         None,
     )
     .await
@@ -41,7 +40,7 @@ async fn reap_removes_a_previously_created_environment_and_emits_a_teardown_even
     let capture = EventCapture::install();
     let ready = create_ephemeral_environment(
         package_specs(&["fixture-probe"]),
-        root_fixture_config(ChannelPriorityMode::Strict),
+        root_fixture_config(ChannelPriority::Strict),
         None,
     )
     .await
@@ -74,14 +73,14 @@ async fn reap_removes_every_environment_regardless_of_how_many_exist() {
     let _context = TestContext::new("reap-multiple-environments");
     let first = create_ephemeral_environment(
         package_specs(&["fixture-probe"]),
-        root_fixture_config(ChannelPriorityMode::Strict),
+        root_fixture_config(ChannelPriority::Strict),
         None,
     )
     .await
     .unwrap();
     let second = create_ephemeral_environment(
         package_specs(&["fixture-default-alpha"]),
-        root_fixture_config(ChannelPriorityMode::Strict),
+        root_fixture_config(ChannelPriority::Strict),
         None,
     )
     .await
@@ -118,7 +117,7 @@ async fn reaping_twice_in_a_row_is_a_no_op_the_second_time() {
     let _context = TestContext::new("reap-idempotent");
     create_ephemeral_environment(
         package_specs(&["fixture-probe"]),
-        root_fixture_config(ChannelPriorityMode::Strict),
+        root_fixture_config(ChannelPriority::Strict),
         None,
     )
     .await

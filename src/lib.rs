@@ -4,6 +4,8 @@
 //! `allez` library: the CLI scaffold plus the ephemeral-environment core
 //! (GEN-24). `src/main.rs` is a thin binary shim over this library target.
 
+/// `.condarc` file handling and channel-configuration resolution.
+pub mod channel_config;
 /// The CLI scaffold (argument parsing, subcommand stubs) — unmodified by
 /// GEN-24; wiring the ephemeral-environment core into a real subcommand
 /// is GEN-25's job.

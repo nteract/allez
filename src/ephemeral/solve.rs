@@ -8,15 +8,7 @@ use rattler_repodata_gateway::Gateway;
 use rattler_solve::{ChannelPriority, SolverImpl, SolverTask, resolvo::Solver};
 use rattler_virtual_packages::{Override, VirtualPackageOverrides, VirtualPackages};
 
-use super::{
-    channels::{
-        ChannelConfig, ChannelPriorityMode, channels_with_fallback, filter_channels,
-        resolve_channel_source,
-    },
-    defaults::PackageSpec,
-    error::EphemeralEnvError,
-    paths::VerifiedRoot,
-};
+use super::{defaults::PackageSpec, error::EphemeralEnvError, paths::VerifiedRoot};
 
 /// A stable `User-Agent`, distinct from `reqwest`'s own default of sending
 /// none at all: `repo.anaconda.com`'s CDN has been observed rejecting
@@ -35,17 +27,10 @@ pub(crate) struct SolvedPackages {
 
 pub(crate) async fn solve_packages(
     root: &VerifiedRoot,
-    config: &ChannelConfig,
+    config: &condarc::ResolvedChannels,
     packages: &[PackageSpec],
 ) -> Result<SolvedPackages, EphemeralEnvError> {
-    let filtered_config = ChannelConfig {
-        channels: channels_with_fallback(&config.channels),
-        channel_priority: config.channel_priority,
-        allowed_channels: config.allowed_channels.clone(),
-        denied_channels: config.denied_channels.clone(),
-    };
-    let channels = filter_channels(&filtered_config);
-    if channels.is_empty() {
+    if config.channels.is_empty() {
         return Err(EphemeralEnvError::NoChannelsConfigured);
     }
 
@@ -55,9 +40,10 @@ pub(crate) async fn solve_packages(
         .build()
         .map_err(|_| EphemeralEnvError::ResolutionFailed)?;
     let channel_config = RattlerChannelConfig::default_with_root_dir(root.path().to_path_buf());
-    let sources = channels
+    let sources = config
+        .channels
         .iter()
-        .map(|channel| Channel::from_str(resolve_channel_source(channel), &channel_config))
+        .map(|channel| Channel::from_str(channel, &channel_config))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|_| EphemeralEnvError::ResolutionFailed)?;
     let specs = packages
@@ -120,10 +106,13 @@ pub(crate) async fn solve_packages(
     })
 }
 
-const fn solver_priority(priority: ChannelPriorityMode) -> ChannelPriority {
+const fn solver_priority(priority: condarc::ChannelPriority) -> ChannelPriority {
     match priority {
-        ChannelPriorityMode::Strict => ChannelPriority::Strict,
-        ChannelPriorityMode::Flexible | ChannelPriorityMode::Disabled => ChannelPriority::Disabled,
+        condarc::ChannelPriority::Strict => ChannelPriority::Strict,
+        condarc::ChannelPriority::Flexible | condarc::ChannelPriority::Disabled => {
+            ChannelPriority::Disabled
+        }
+        _ => ChannelPriority::Disabled,
     }
 }
 
@@ -134,20 +123,15 @@ mod tests {
     use rattler_conda_types::Channel;
 
     use super::solve_packages;
-    use crate::ephemeral::{ChannelConfig, ChannelPriorityMode, EphemeralEnvError, PackageSpec};
+    use crate::ephemeral::{EphemeralEnvError, PackageSpec};
 
     #[tokio::test]
-    async fn solve_packages_when_filtering_removes_fallback_returns_no_channels() {
+    async fn solve_packages_when_channels_are_empty_returns_no_channels() {
         // Given
         let temporary_directory = tempfile::tempdir().unwrap();
         let root =
             super::super::paths::verified_root(&temporary_directory.path().join("root")).unwrap();
-        let config = ChannelConfig {
-            channels: Vec::new(),
-            channel_priority: ChannelPriorityMode::Strict,
-            allowed_channels: vec!["fixture-only".to_string()],
-            denied_channels: Vec::new(),
-        };
+        let config = condarc::ResolvedChannels::from_channels(Vec::new());
         let packages = vec![PackageSpec::parse("fixture-default-alpha").unwrap()];
 
         // When
@@ -166,7 +150,7 @@ mod tests {
         let temporary_directory = tempfile::tempdir().unwrap();
         let root =
             super::super::paths::verified_root(&temporary_directory.path().join("root")).unwrap();
-        let config = ChannelConfig::from_urls(vec!["https://[".to_string()]);
+        let config = condarc::ResolvedChannels::from_channels(vec!["https://[".to_string()]);
         let packages = vec![
             PackageSpec::parse("known-good-first").unwrap(),
             PackageSpec::parse("unrelated-second").unwrap(),
@@ -190,7 +174,7 @@ mod tests {
         let channel = Channel::try_from_directory(&fixture_directory)
             .unwrap()
             .canonical_name();
-        let config = ChannelConfig::from_urls(vec![channel]);
+        let config = condarc::ResolvedChannels::from_channels(vec![channel]);
         let packages = vec![
             PackageSpec::parse("fixture-default-alpha").unwrap(),
             PackageSpec::parse("missing-later-package").unwrap(),
@@ -206,7 +190,7 @@ mod tests {
     #[test]
     fn solver_priority_when_flexible_uses_disabled_priority() {
         // Given
-        let priority = ChannelPriorityMode::Flexible;
+        let priority = condarc::ChannelPriority::Flexible;
 
         // When
         let resolved_priority = super::solver_priority(priority);

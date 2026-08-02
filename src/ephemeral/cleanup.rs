@@ -1,11 +1,9 @@
 //! Anchored, verified environment-prefix removal.
 //!
-//! There is no RAII cleanup guard and no automatic removal any more — see
-//! the GEN-24 spec's "Explicit reap, no automatic reaping" decision. This
-//! module now holds exactly one thing: the mechanics of removing one
-//! environment's directory tree, anchored to an already-verified root, so
-//! neither the failed-creation rollback in `mod.rs` nor the explicit
-//! `reap` module has to reimplement that anchoring/verification itself.
+//! There is no RAII cleanup guard and no automatic removal. This module
+//! holds exactly one thing: the mechanics of removing one environment's
+//! directory tree, anchored to an already-verified root, used only by the
+//! failed-creation rollback in `mod.rs`.
 
 use super::{error::EphemeralEnvError, lifecycle::EnvironmentId, paths::VerifiedRoot};
 

@@ -1,15 +1,13 @@
 //! Manual smoke test for GEN-24's ephemeral environment core (see
 //! `specs/GEN-24_ephemeral_env_core/quickstart.md`). Exercises the real
-//! create -> reap flow against the checked-in local fixture channel,
-//! printing the resolved location and installed packages so a human can
-//! visually confirm the manual validation steps in `quickstart.md`
-//! (owner-only permissions, explicit reap).
+//! creation flow against the checked-in local fixture channel, printing
+//! the resolved location and installed packages so a human can visually
+//! confirm the manual validation steps in `quickstart.md` (owner-only
+//! permissions, no teardown).
 //!
 //! Run with: `ALLEZ_EPHEMERAL_ROOT=/tmp/allez-smoke cargo run --example ephemeral_smoke`
 
-use allez::ephemeral::{
-    RequestedPackages, create_ephemeral_environment, reap_ephemeral_environments,
-};
+use allez::ephemeral::{RequestedPackages, create_ephemeral_environment};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -28,13 +26,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  {} {}", pkg.name, pkg.version);
     }
 
-    // Nothing above tore the environment down automatically -- it stays on
-    // disk, usable, until reaped explicitly.
+    // Nothing above tore the environment down -- it stays on disk,
+    // usable, indefinitely (past this process's own exit); this crate
+    // exposes no way to remove it afterward.
     assert!(ready.location.exists());
-
-    let outcomes = reap_ephemeral_environments()?;
-    println!("reaped {} environment(s)", outcomes.len());
-    assert!(!ready.location.exists());
-    println!("environment removed: {}", ready.location.display());
     Ok(())
 }

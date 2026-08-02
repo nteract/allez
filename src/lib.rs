@@ -10,8 +10,8 @@ pub mod channel_config;
 /// GEN-24; wiring the ephemeral-environment core into a real subcommand
 /// is GEN-25's job.
 pub mod cli;
-/// The ephemeral-environment core: create, populate, and tear down an
-/// unnamed, caller-unpathed conda environment (GEN-24).
+/// The ephemeral-environment core: create and populate an unnamed,
+/// caller-unpathed conda environment (GEN-24).
 pub mod ephemeral;
 /// The fixed usage-error categories (`AllezError`) plus the shared
 /// [`CategorizedError`](error::CategorizedError) trait every

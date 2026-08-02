@@ -1,11 +1,16 @@
 # Interface Contract: `condarc::expand_channels` (the crate's new public API surface)
 
-This ticket adds exactly three new public items to the
-already-published `condarc` crate's surface (`crates/condarc/src/lib.rs`):
-`expand_channels()` itself, plus its `ResolvedChannels`/`ExpandChannelsError`
-return types. Every other existing public item (`parse`,
-`parse_with_options`, `Config`, `ValidationReport`, ...) is unchanged —
-this contract is purely additive (spec.md Operating Context #1).
+This ticket adds four new public items to the already-published
+`condarc` crate's surface (`crates/condarc/src/lib.rs`): `expand_channels()`
+itself, its `ResolvedChannels`/`ExpandChannelsError` return types, and
+`ResolvedChannels::from_channels()` (a plain constructor, needed since
+the struct is `#[non_exhaustive]`). Every other existing public item
+(`parse`, `parse_with_options`, `Config`, `ValidationReport`, ...) is
+unchanged — this contract is purely additive to the crate itself
+(spec.md Operating Context #1); the workspace-wide effect is not purely
+additive, since `allez::ephemeral`'s own `ChannelConfig`/`ChannelSpec`/
+`ChannelPriorityMode` are retired in favor of this contract's own types
+(FR-016, research.md R15).
 
 Signatures are shown without bodies, matching how GEN-24's own
 `ephemeral_env_api.md` documents its contract — full bodies for the small
@@ -35,6 +40,10 @@ pub fn expand_channels(config: &Config) -> Result<ResolvedChannels, ExpandChanne
 pub struct ResolvedChannels {
     pub channels: Vec<String>,
     pub channel_priority: ChannelPriority,
+}
+
+impl ResolvedChannels {
+    pub fn from_channels(channels: Vec<String>) -> Self;
 }
 
 #[non_exhaustive]
@@ -108,13 +117,11 @@ carries separate `allowlist_channels`/`denylist_channels` fields — see
   precedence as `channels`) and applied directly to `channels` —
   denied entries removed first, then, if the resolved allow-list is
   non-empty, every entry not in it removed too (FR-004/FR-019) — but
-  never exposed as their own fields. This is a fresh, `condarc`-local
-  implementation of the same deny-then-allow policy `allez`'s own
-  already-delivered, crate-internal `filter_channels()`
-  (`src/ephemeral/channels.rs`, GEN-24) applies at environment-creation
-  time; `expand_channels()` does not call, depend on, or alter that
-  function in any way — see spec.md Assumptions, "Two independent
-  implementations of the same filtering policy."
+  never exposed as their own fields. This is the sole implementation of
+  this deny-then-allow policy in the workspace; `allez`'s own former
+  copy, `filter_channels()` (`src/ephemeral/channels.rs`, GEN-24), is
+  retired (FR-016, research.md R15) now that this contract's own output
+  already carries the filtered result.
 
 ## Non-goals (explicitly out of this contract)
 

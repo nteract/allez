@@ -21,10 +21,10 @@ type.
   Known Limitations). Its only coverage is the manual, optional
   `examples/channel_config_smoke.rs` (below), run deliberately by a
   developer, never by `cargo test` (research.md R8). Every automated
-  `allez`-level test drives the path-injectable internal function or the
-  private `adapt()` function instead, using `tempfile` fixtures; the
-  crate-level `expand_channels()` tests (SC-003) call `expand_channels()`
-  directly, a third path touching neither entry point's file handling.
+  `allez`-level test drives the path-injectable internal function
+  directly, using `tempfile` fixtures; the crate-level
+  `expand_channels()` tests (SC-003) call `expand_channels()`
+  directly, a second path touching neither entry point's file handling.
 
 ## Setup
 
@@ -149,7 +149,8 @@ target platforms per the workspace's own CI matrix.
   test in this section exercises the real `condarc::parse` and real
   `condarc::expand_channels`, never a private reimplementation of either
   — SC-002/SC-004/SC-005/SC-006 via `resolve_channel_config_from`,
-  SC-001 via a direct `expand_channels()` + `adapt()` call
+  SC-001 via a direct `expand_channels()` call, asserted against
+  `resolve_channel_config_from`'s own `Ready.config`
   (contracts/allez_channel_config_api.md's own file-state table names
   both calls explicitly). No separate assertion needed beyond what those
   already exercise end-to-end.
@@ -166,7 +167,7 @@ target platforms per the workspace's own CI matrix.
   (FR-018, see SC-005 below), and populated — each via
   `resolve_channel_config_from(Some(path))`/`None`, asserting
   `ChannelConfigResolution::Ready { config, fallback }` with a valid,
-  fully-populated `ChannelConfig` in every case (User Story 2 Scenarios
+  fully-populated channel configuration in every case (User Story 2 Scenarios
   1–3, plus the populated/happy-path case — Scenario 4 is the separate
   never-mutates guarantee, covered by its own FR-013 bullet below), and
   asserting `fallback`'s exact value for each — `None`, `Some(Rejected)`,
@@ -178,23 +179,18 @@ target platforms per the workspace's own CI matrix.
   `Some(<nonexistent path>)` even though both take the same silent
   fallback path (FR-009).
 - **SC-001** — a co-located `#[cfg(test)]` unit test inside
-  `src/channel_config/adapt.rs`, calling the private `adapt()` function
-  directly (not a `tests/` integration test, since `adapt()` isn't
-  `pub` — research.md R8), for at least 5 distinct, real-world-shaped
-  `.condarc` samples that do not set `allowlist_channels`/`denylist_channels`
-  (e.g. a plain `channels: [conda-forge, defaults]`; one exercising
-  `custom_channels`+`custom_multichannels` together; one whose `channels`
-  mixes the `defaults` placeholder with an already-fully-qualified URL
-  entry; one with `channel_priority` set via a legacy boolean spelling;
-  one relying purely on defaults), confirming `adapt()`'s field-by-field
-  mapping (FR-012) produces the exact same `ChannelConfig` a hand-written
-  expected value would — the expected value's own
-  `allowed_channels`/`denied_channels` always `Vec::new()`, since
-  `ResolvedChannels` no longer carries those as separate fields
-  (FR-019, research.md R12). A sixth sample setting
-  `allowlist_channels`/`denylist_channels` is added once allow/deny
-  filtering exists, asserting the same field-by-field mapping against
-  the post-filtering result.
+  `src/channel_config/mod.rs`, for at least 5 distinct, real-world-shaped
+  `.condarc` samples (e.g. a plain `channels: [conda-forge, defaults]`;
+  one exercising `custom_channels`+`custom_multichannels` together; one
+  whose `channels` mixes the `defaults` placeholder with an
+  already-fully-qualified URL entry; one with `channel_priority` set via
+  a legacy boolean spelling; one setting `allowlist_channels`/
+  `denylist_channels`), asserting `resolve_channel_config_from`'s
+  `Ready.config` equals `condarc::expand_channels(&config)`'s own output
+  exactly (FR-012, research.md R15) — there is no mapping logic left to
+  verify now that `Ready.config` is `condarc::ResolvedChannels` directly,
+  so this test guards against `mod.rs` ever silently wrapping or
+  transforming that value, not against a mapping bug.
 - **SC-004** — one test per fallback path (a `parse()` rejection, an
   `expand_channels()` failure per FR-018, and an unreadable file)
   asserting a `ChannelConfigFallbackEvent` is actually emitted (captured
@@ -221,9 +217,12 @@ target platforms per the workspace's own CI matrix.
   filtering but whose `allowlist_channels`/`denylist_channels` remove
   every entry (FR-019) asserts `resolve_channel_config_from` returns
   `ChannelConfigResolution::NoChannels` — not `Ready` with an empty
-  `ChannelConfig` — proving `allez`'s own layer catches this before
-  GEN-24's `channels_with_fallback` ever could (FR-020, research.md
-  R13). A separate, non-filtering-caused case — a `.condarc` setting
+  channel configuration. This distinction remains essential even though
+  GEN-24's own `channels_with_fallback` is retired (research.md R15):
+  GEN-24's environment-creation capability now receives
+  `condarc::ResolvedChannels` directly, with no fallback net of its own
+  left to catch an ambiguous empty list (FR-020, research.md R13). A
+  separate, non-filtering-caused case — a `.condarc` setting
   `custom_multichannels: {defaults: []}` with no `allowlist_channels`/
   `denylist_channels` involved — asserts the same `NoChannels` result,
   covering FR-020's other legitimate cause (spec.md Design Decisions,
@@ -244,10 +243,12 @@ target platforms per the workspace's own CI matrix.
 ## Manual smoke test (optional, illustrative)
 
 `examples/channel_config_smoke.rs` exercises the full read → parse →
-resolve → adapt pipeline against whatever `~/.condarc` (if any) exists on
+resolve pipeline against whatever `~/.condarc` (if any) exists on
 the machine running it:
 
 ```rust
+use allez::ephemeral::redact_channel_url;
+
 fn main() {
     match allez::channel_config::resolve_channel_config() {
         allez::channel_config::ChannelConfigResolution::Ready { config, fallback, .. } => {
@@ -257,10 +258,12 @@ fn main() {
             println!("channel_priority: {:?}", config.channel_priority);
             println!("channels:");
             for channel in &config.channels {
-                println!("  {channel:?}"); // ChannelSpec's own Debug already redacts credentials
+                // redact_channel_url applied explicitly at this format site —
+                // ResolvedChannels no longer carries a redacting Debug impl of
+                // its own (research.md R15); GEN-24's own credential-redaction
+                // property is preserved as a plain function call instead.
+                println!("  {:?}", redact_channel_url(channel));
             }
-            // allowed_channels/denied_channels are always empty here — FR-019
-            // already applied that filtering inside expand_channels() itself.
         }
         allez::channel_config::ChannelConfigResolution::NoChannels => {
             // FR-020 — a fully successful resolution whose allow/deny
@@ -288,8 +291,9 @@ common case (at minimum the built-in `defaults` URLs, if no `~/.condarc`
 exists or configures none explicitly) — and the effective
 channel-priority mode, with no raw credential material ever printed,
 even if the running machine's own `~/.condarc` happens to contain any
-(`ChannelSpec::Debug`, GEN-24's own existing defense-in-depth, redacts
-it regardless of this ticket's scope). If the machine's own
+(`redact_channel_url()`, GEN-24's own existing defense-in-depth,
+applied explicitly at this print site — research.md R15). If the
+machine's own
 `~/.condarc`'s allow/deny filtering (FR-019) legitimately removes every
 channel, this prints the distinct `NoChannels` message above instead of
 an empty list (FR-020) — one of two legitimate causes of an

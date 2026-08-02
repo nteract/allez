@@ -1,4 +1,4 @@
-# Interface Contract: `allez`'s channel-config file handling and adaptation
+# Interface Contract: `allez`'s channel-config file handling
 
 This is a Rust in-process library API, not an HTTP/CLI interface — the
 same posture GEN-24's own `ephemeral_env_api.md` documents for that
@@ -20,10 +20,11 @@ same way GEN-24's own public API does; for `NoChannels`, there is no
 
 ```rust
 /// Locates and reads `~/.condarc`, parses and resolves it through the
-/// `condarc` crate, and adapts the result into GEN-24's
-/// `ChannelConfig` shape, paired with an explicit fallback signal
+/// `condarc` crate, and hands the result directly to GEN-24's
+/// environment-creation capability as its own channel-configuration
+/// input, paired with an explicit fallback signal
 /// (FR-017) — or reports FR-020's zero-usable-channels case instead of
-/// ever constructing an intentionally-empty `ChannelConfig`.
+/// ever constructing an intentionally-empty channel configuration.
 ///
 /// Always returns a fully-populated `ChannelConfigResolution` for every
 /// `~/.condarc` state a caller can present — never fails, and never
@@ -44,7 +45,7 @@ same way GEN-24's own public API does; for `NoChannels`, there is no
 /// observability output. A `~/.condarc` that resolves successfully but
 /// whose allow/deny filtering (FR-019) leaves zero channels returns
 /// `NoChannels` instead (FR-020) — never a `Ready` carrying an empty
-/// `ChannelConfig`.
+/// channel configuration.
 ///
 /// Resolves fresh from `~/.condarc` on every call. Never caches or
 /// reuses a previous result across separate calls (FR-015). Never
@@ -62,19 +63,21 @@ pub enum ChannelConfigResolution {
     /// documented defaults (missing/rejected/unreadable/unexpandable
     /// fallback).
     Ready {
-        /// GEN-24's own, unmodified `crate::ephemeral::ChannelConfig`.
-        /// `allowed_channels`/`denied_channels` are always empty —
-        /// FR-019 already filtered `channels` before this value was
-        /// constructed.
-        config: crate::ephemeral::ChannelConfig,
+        /// The crate's own `condarc::ResolvedChannels`, exactly as
+        /// `condarc::expand_channels()` produced it — GEN-24's own
+        /// required channel-configuration input directly (FR-012/FR-016,
+        /// research.md R15). `channels` is already deny/allow-filtered —
+        /// FR-019 applied that upstream, inside `expand_channels()`
+        /// itself.
+        config: condarc::ResolvedChannels,
         /// `None` unless this call's fallback was caused by a rejected,
         /// unreadable, or unexpandable `~/.condarc` (FR-017/FR-018).
         fallback: Option<FallbackReason>,
     },
     /// A fully successful resolution whose allow/deny filtering left
     /// zero usable channels (FR-019/FR-020) — not a fallback, not an
-    /// error, and never paired with a `ChannelConfig` a caller could
-    /// mistakenly pass to GEN-24.
+    /// error, and never paired with a channel configuration a caller
+    /// could mistakenly pass to GEN-24.
     NoChannels,
 }
 
@@ -93,7 +96,7 @@ pub use events::FallbackReason;
   per FR-018), this function returns a value — no `Result`/`Option`
   return type, and no panic path reachable from any such state
   (SC-002). It never constructs an
-  intentionally-empty `ChannelConfig` either — `NoChannels` exists
+  intentionally-empty channel configuration either — `NoChannels` exists
   specifically so a caller cannot receive one (FR-020). This guarantee
   depends on one internal invariant: resolving `Config::default()`
   itself (the default-fallback path every non-`Ready`-from-real-file
@@ -122,8 +125,8 @@ pub use events::FallbackReason;
   | Present, `condarc::parse` rejects it | `Ready` | Same as absent | `ChannelConfigFallbackEvent { reason: Rejected, detail: <ValidationReport text> }` (FR-011) | `Some(FallbackReason::Rejected)` |
   | Present, unreadable (OS permission/I-O error) | `Ready` | Same as absent | `ChannelConfigFallbackEvent { reason: Unreadable, detail: <io::Error text> }` (FR-011) | `Some(FallbackReason::Unreadable)` |
   | Present, parses, but `condarc::expand_channels` returns `Err` (FR-018) | `Ready` | Same as absent | `ChannelConfigFallbackEvent { reason: Rejected, detail: <ExpandChannelsError text> }` (FR-011, `Rejected` broadened per research.md R11) | `Some(FallbackReason::Rejected)` |
-  | Present, parses and expands successfully, `channels` non-empty | `Ready` | `adapt(condarc::expand_channels(&config)?)` | None (FR-009, ordinary success) | `None` |
-  | Present, parses and expands successfully, `channels` empty (FR-019 filtering removed every entry, or the configuration otherwise resolves to an empty list) | `NoChannels` | — no `ChannelConfig` constructed (FR-020) | None (a successful resolution, not a fallback) | — no `fallback` field on this variant |
+  | Present, parses and expands successfully, `channels` non-empty | `Ready` | `condarc::expand_channels(&config)?` | None (FR-009, ordinary success) | `None` |
+  | Present, parses and expands successfully, `channels` empty (FR-019 filtering removed every entry, or the configuration otherwise resolves to an empty list) | `NoChannels` | — no channel configuration constructed (FR-020) | None (a successful resolution, not a fallback) | — no `fallback` field on this variant |
 
 - **Never mutates `~/.condarc`** (FR-013) — this function only ever
   calls `std::fs::read_to_string` (or an equivalent read-only primitive)
@@ -132,25 +135,21 @@ pub use events::FallbackReason;
   resolved channel identifiers themselves, and in the fallback
   observability event's own `detail` field — this ticket's own scope
   does not strip or transform any of it.
-- **Adaptation is lossless and field-by-field** (FR-012/SC-001): the
-  returned `ChannelConfig`'s `channels`/`channel_priority` fields are
-  populated directly from `condarc::ResolvedChannels`'s two corresponding
-  fields, with no additional resolution or transformation logic;
-  `allowed_channels`/`denied_channels` are always empty, since FR-019
-  already applied that filtering upstream, inside `expand_channels()`
-  itself — verifiable by constructing both independently from the same
-  `.condarc` sample and comparing.
-- **No effect on GEN-24's own existing behavior** (FR-016): this
-  function never edits, and its own logic never re-implements,
-  `allez::ephemeral`'s existing empty-channel-list fallback, allow/deny
-  filtering (`filter_channels()`, still called unmodified from
-  `solve_packages()`), or defense-in-depth credential redaction — it only
-  constructs a `ChannelConfig` value for a caller (e.g. GEN-25) to pass
-  into `create_ephemeral_environment` unchanged, exactly as any other
-  caller of that already-published function would. `filter_channels()`
-  simply has nothing left to remove for a `ChannelConfig` this function
-  produces (see spec.md Assumptions, "Two independent implementations of
-  the same filtering policy").
+- **No adaptation step** (FR-012/SC-001): `Ready.config` is
+  `condarc::expand_channels()`'s own `ResolvedChannels` output,
+  unchanged — GEN-24's environment-creation capability now takes that
+  type directly as its own channel-configuration input, so there is no
+  intermediate type or field-by-field mapping left to verify.
+- **Retires GEN-24's now-duplicate channel-configuration behavior**
+  (FR-016, research.md R15): `allez::ephemeral`'s previously-separate
+  `ChannelConfig`/`ChannelSpec`/`ChannelPriorityMode` types, its
+  empty-channel-list fallback (`channels_with_fallback()`), and its own
+  allow/deny filtering (`filter_channels()`) are removed — each existed
+  only to compensate for GEN-24 never having a fully-resolved,
+  already-filtered channel list of its own to consume. GEN-24's
+  defense-in-depth credential redaction (`redact_channel_url()`)
+  survives, applied explicitly at each channel-identifier format site
+  rather than through a retired wrapper type's `Debug` impl.
 
 ## Non-goals (explicitly out of this contract)
 
@@ -162,10 +161,10 @@ pub use events::FallbackReason;
 - Any policy for what a caller does with a `NoChannels` result (warn,
   abort, proceed with no environment) — GEN-25's own job; this contract
   only guarantees a caller can never mistake it for a `Ready` carrying an
-  empty `ChannelConfig` (FR-020).
-- Applying `ChannelConfig` to an actual environment creation — this
-  function's return value is an *input* to `create_ephemeral_environment`
-  (GEN-24), not a call to it.
+  empty channel configuration (FR-020).
+- Applying the resolved channel configuration to an actual environment
+  creation — this function's return value is an *input* to
+  `create_ephemeral_environment` (GEN-24), not a call to it.
 - Any notion of a `CONDARC` environment-variable override or a
   multi-source conda search path — this ticket's scope is `~/.condarc`
   only, matching GEN-36's own already-documented single-document,

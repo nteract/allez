@@ -129,17 +129,19 @@ decision. Recording it here makes it a decision this ticket owns, not a
 silently inherited assumption.
 
 **Reconciliation with GEN-24's own `DEFAULTS_CHANNEL_URL`**: GEN-24's
-existing `channels_with_fallback` (`src/ephemeral/channels.rs`) already
-defines its own single-URL `DEFAULTS_CHANNEL_URL` constant, used purely
-as that function's own last-resort substitute for an *initially-supplied*
-empty `ChannelConfig.channels` (GEN-24 FR-015) — a narrower, code-level
-safety net with no `.condarc` awareness of its own. `DEFAULT_CHANNELS`
-above is a different constant for a different purpose: it is what this
-ticket's `expand_channels()` substitutes specifically for the `defaults`
+`channels_with_fallback` (`src/ephemeral/channels.rs`) previously defined
+its own single-URL `DEFAULTS_CHANNEL_URL` constant, used purely as that
+function's own last-resort substitute for an *initially-supplied* empty
+channel list (GEN-24 FR-015) — a narrower, code-level safety net with no
+`.condarc` awareness of its own. `DEFAULT_CHANNELS` above is a different
+constant for a different purpose: it is what this ticket's
+`expand_channels()` substitutes specifically for the `defaults`
 placeholder when resolving real `.condarc` content, matching conda's own
-documented multi-URL default. The two constants intentionally serve
-different call sites and are never required to agree — GEN-24's own
-function and constant are unmodified by this ticket (FR-016).
+documented multi-URL default. The two constants served different call
+sites and were never required to agree while both existed;
+`channels_with_fallback`/`DEFAULTS_CHANNEL_URL` are now retired (FR-016,
+R15) since FR-020's `NoChannels` distinction already catches the
+legitimately-empty case one layer earlier than that fallback ever ran.
 
 ## R5 — Channel-entry resolution algorithm (FR-001) has two resolution modes, not one
 
@@ -280,15 +282,15 @@ is `pub(crate)`, and a Rust integration test compiles as a separate
 crate, which cannot name a `pub(crate)` item at all. The same applies to
 SC-004's observability-capture tests (3 fallback-path cases — rejected,
 unreadable, and an `expand_channels()` failure sharing `Rejected`'s
-treatment per R11) and to SC-001's six-sample adaptation contract test,
-which calls the private `adapt()` function directly inside
-`src/channel_config/adapt.rs`. Each of SC-001's 6 samples parses a
+treatment per R11) and to SC-001's five-sample pass-through test in
+`src/channel_config/mod.rs`. Each of SC-001's 5 samples parses a
 hand-authored `.condarc` string, resolves it through
-`condarc::expand_channels`, calls the real `adapt()`, and asserts it
-equals a hand-typed literal `ChannelConfig` — never re-deriving the
-expected value by re-executing `adapt()`'s own logic, which would let a
-mapping bug go undetected. No `tests/channel_config_resolution.rs`
-integration file is added; there's no capability-level need for one.
+`condarc::expand_channels` directly, and asserts `resolve_channel_config_from`'s
+`Ready.config` equals that same `ResolvedChannels` value exactly (R15) —
+proving `mod.rs` hands the crate's own output through unchanged; there
+is no mapping logic left for a test to catch a bug in. No
+`tests/channel_config_resolution.rs` integration file is added; there's
+no capability-level need for one.
 
 There is deliberately no automated test of the public, zero-argument
 `resolve_channel_config()` entry point against a real, uncontrolled
@@ -406,9 +408,10 @@ observability event and this field. `fallback` is `None` for a
 fully-successful resolution and for the silent missing-file case
 (FR-009); `Some(Rejected)`/`Some(Unreadable)` for FR-011's recorded
 fallback cases (broadened to a third trigger by R11, without a third
-variant). `config` remains exactly GEN-24's unmodified four-part
-`ChannelConfig` — the wrapper adds a sibling field, never a fifth field
-inside `ChannelConfig`.
+variant). `config` was originally GEN-24's own four-part `ChannelConfig`
+— the wrapper added a sibling field, never a fifth field inside
+`ChannelConfig` — until R15 retired that type in favor of
+`condarc::ResolvedChannels` directly.
 
 **Rationale**: FR-017 requires this condition be inspectable at the
 result level, not only via a tracing event a caller might never read
@@ -496,29 +499,31 @@ a `ChannelSpec.url_or_name` verbatim, including the literal bare name
 fully-qualified identifiers on both sides. The crate cannot call
 `filter_channels()` directly — `crates/condarc` has no dependency on
 `allez` and never will (R7) — so satisfying the reviewer's ask requires
-an independent implementation. FR-016's "MUST NOT reimplement" language
-is scoped to `allez`'s own codebase reimplementing its own logic; a new
-implementation inside a different crate for a different consumer is
+an independent implementation. This crate-local implementation is
 exactly the independently-useful generic behavior spec.md's Operating
-Context already gives as this ticket's reason for moving resolution into
-the crate. See spec.md Assumptions, "Two independent implementations of
-the same filtering policy," for the full argument, and "Allow/deny
+Context already gives as this ticket's reason for moving resolution
+into the crate — and, per R15, it is now the *only* implementation of
+this policy in the workspace, since `allez`'s own copy is retired
+rather than kept redundant once this crate-local pass already produces
+the final list. See spec.md Assumptions, "Single implementation of the
+filtering policy" and "Allow/deny
 value-level conflicts are now reconciled by construction" for the
 resulting behavior change (a channel in both lists is now removed, not
 passed through unreconciled).
 
-`allez`'s own `adapt()` (data-model.md) now constructs `ChannelConfig`
-with `allowed_channels: Vec::new()` and `denied_channels: Vec::new()` —
-GEN-24's own `filter_channels()` remains unmodified and still runs from
-`solve_packages()`; it simply has nothing left to remove for a
-`ChannelConfig` this ticket's adaptation layer produces, and remains
-load-bearing for every other caller that constructs a `ChannelConfig`
-directly (e.g. `ChannelConfig::from_urls`).
+`ResolvedChannels` never carries separate allow/deny fields for a
+downstream caller to filter again — GEN-24's own `filter_channels()`
+previously ran a second time inside `solve_packages()`, matching the
+same policy against a `ChannelConfig`'s own `allowed_channels`/
+`denied_channels` fields; once this ticket's own filtering already
+produces the final list, that second pass has nothing left to remove.
+R15 retires `filter_channels()` outright (FR-016) rather than leaving it
+a permanently-quiet, always-no-op call site.
 
 **Alternatives considered**:
 - *Combine only at the `allez` level* (leave `ResolvedChannels` with
-  three raw lists, have `adapt()` filter) — rejected: the reviewer's ask
-  was specifically about the crate-level `ResolvedChannels` type; a
+  three raw lists, filter in `allez` instead) — rejected: the reviewer's
+  ask was specifically about the crate-level `ResolvedChannels` type; a
   future non-`allez` consumer would still get three raw lists to filter
   itself.
 - *Have `expand_channels()` depend on `allez` to call `filter_channels()`
@@ -532,7 +537,7 @@ instead of a struct:
 ```rust
 #[non_exhaustive]
 pub enum ChannelConfigResolution {
-    Ready { config: ChannelConfig, fallback: Option<FallbackReason> },
+    Ready { config: condarc::ResolvedChannels, fallback: Option<FallbackReason> },
     NoChannels,
 }
 ```
@@ -543,33 +548,36 @@ pub enum ChannelConfigResolution {
 resolves to nothing) — and `Ready { .. }` for every other case, exactly
 as `ChannelConfigResolution` already worked before this decision (R10).
 
-**Rationale**: GEN-24's own, unmodified `channels_with_fallback`
-(`src/ephemeral/channels.rs`) treats *any* empty `ChannelConfig.channels`
-as "nothing was configured" and silently substitutes the built-in
-`defaults` channel — correct for GEN-24's original callers, who never had
-a reason to construct a deliberately empty `ChannelConfig`. R12 changes
-that: once `expand_channels()` filters the main list down to nothing,
-`allez`'s adaptation layer would otherwise hand GEN-24 exactly the empty
-`ChannelConfig` `channels_with_fallback` is designed to override —
-silently replacing a user's own explicit deny-everything restriction
-with `defaults`, the opposite of what the user configured. Before R12,
-`ChannelConfig.channels` was never empty as a result of filtering at this
-ticket's layer — the raw list was handed to GEN-24, and
-`filter_channels()`'s own later call inside `solve_packages()` correctly
-turned a filtered-to-empty result into `EphemeralEnvError::NoChannelsConfigured`
+**Rationale**: GEN-24's own `channels_with_fallback`
+(`src/ephemeral/channels.rs`, retired by R15) treated *any* empty
+channel list as "nothing was configured" and silently substituted the
+built-in `defaults` channel — correct for GEN-24's original callers, who
+never had a reason to construct a deliberately empty channel
+configuration. R12's move of filtering into `expand_channels()` made
+that assumption unsafe: once the main list is filtered down to nothing,
+handing GEN-24 that empty result unmarked would let a retired fallback
+silently override a user's own explicit deny-everything restriction
+with `defaults` — the opposite of what the user configured. Before R12,
+this ticket's layer never produced an empty list as a result of
+filtering — the raw list was handed to GEN-24, and `filter_channels()`'s
+own later call inside `solve_packages()` correctly turned a
+filtered-to-empty result into `EphemeralEnvError::NoChannelsConfigured`
 (an explicit error, not a silent default) precisely because
-`channels_with_fallback` had already run before that filtering. Catching
-this one call earlier is not optional once R12 moves filtering into
-`expand_channels()` itself.
+`channels_with_fallback` had already run before that filtering. Once
+R12 moves filtering into `expand_channels()` itself, catching the empty
+case at that point, not one layer later inside GEN-24, is not optional —
+this is exactly why `filter_channels()`/`channels_with_fallback()` are
+retired (R15) rather than left in place as dead code that would
+otherwise need to keep being reasoned about.
 
 **Alternatives considered**:
 - *Leave `ChannelConfigResolution` as a struct and add a boolean field*
   (`empty_after_filtering: bool`) — rejected: a caller could ignore the
   boolean and pass `config` through to GEN-24 by mistake; an enum makes
   the two cases structurally impossible to conflate.
-- *Fix `channels_with_fallback` itself* — rejected outright by FR-016:
-  that's GEN-24's own delivered behavior, out of this ticket's scope to
-  change.
+- *Keep `channels_with_fallback` in place, unused* — rejected once
+  FR-016 reversed course (R15): a fallback function no caller can ever
+  legitimately reach is dead code, not a safety net.
 - *Have `expand_channels()` itself return `Err` for an empty-after-filtering
   result* — rejected: filtering everything out is a correctly applied
   success, not a failure to compute one; conflating the two would make
@@ -606,6 +614,94 @@ violation of this invariant, before it ever reached this call site.
   guarantee `expand_channels()`'s existing signature already documents
   by convention.
 
+## R15 — GEN-24's own channel-configuration type and its compensating behaviors are retired, per PR review
+
+**Decision**: `allez::ephemeral`'s `ChannelConfig`/`ChannelSpec`/
+`ChannelPriorityMode` types are removed. `create_ephemeral_environment`
+(`src/ephemeral/mod.rs`) and `solve_packages` (`src/ephemeral/solve.rs`)
+take `condarc::ResolvedChannels`/`ChannelPriority` directly instead.
+Three behaviors that existed only to compensate for GEN-24 never having
+a fully-resolved channel list of its own are removed alongside them:
+`channels_with_fallback()` (the empty-list-substitutes-`defaults`
+fallback, GEN-24 FR-015), `filter_channels()` (the allow/deny filtering
+pass), and `resolve_channel_source()`'s special case mapping the literal
+bare name `"defaults"` to `DEFAULTS_CHANNEL_URL` at solve time (that
+special case existed only so the retired fallback/filtering could still
+match against the literal name after substitution — see R4's
+Reconciliation note and R12's Rationale). `redact_channel_url()` survives as a plain function, unchanged and
+still used internally throughout `src/ephemeral/` (`defaults.rs`,
+`lifecycle.rs`, `install.rs`, `error.rs`, `events.rs` all already call
+it directly via `super::channels::redact_channel_url` for unrelated,
+non-channel-config purposes — redacting package-spec strings — FR-016's
+own text already carves this usage out): it is applied explicitly
+wherever a channel identifier is formatted for a log, error, or debug
+output, rather than through the retired types' own `Debug` impls.
+Additionally re-exported from `src/ephemeral/mod.rs`
+(`pub use channels::redact_channel_url;`, replacing the retired
+`ChannelConfig`/`ChannelPriorityMode`/`ChannelSpec` re-exports) so an external caller (`allez`'s own
+`src/channel_config/` module, `examples/ephemeral_smoke.rs`,
+`examples/channel_config_smoke.rs`) can apply it directly — it was
+previously reachable externally only indirectly, through `ChannelSpec`'s
+now-retired `Debug` impl. Every existing GEN-24 test exercising a
+retired item is removed or rewritten against the new shape — a test is
+rewritten when its subject still exists in some form
+(`channel_config_from_urls_defaults_policy`, covering the surviving
+`from_channels()` constructor) and removed when its subject does not
+(`channel_spec_debug_redacts_credentials`,
+`channel_config_debug_redacts_credentials_in_all_channel_fields`,
+`channel_fallback_substitutes_defaults_only_when_empty`,
+`filter_channels_denies_before_applying_allowlist`,
+`filter_channels_without_allowlist_only_applies_denials` — each of
+these tests a type or function this decision deletes outright, with
+its coverage superseded elsewhere: `NoChannels` (FR-020) for the
+fallback case, `apply_allow_deny`'s own crate-level tests for the
+filtering cases). Every use of the retired types outside `channels.rs`
+itself — `solve.rs`'s own test module, `install.rs`'s and
+`examples/ephemeral_smoke.rs`'s fixtures, and every `tests/support/*.rs`
+fixture the existing integration-test suite depends on — is migrated to
+`condarc::ResolvedChannels`/`ChannelPriority` the same way.
+`redact_channel_url_removes_userinfo_and_conda_tokens_and_preserves_clean_values`
+is the one existing test that survives unchanged. Because
+`condarc::ResolvedChannels` is `#[non_exhaustive]`, it gains a new public
+constructor, `ResolvedChannels::from_channels(channels: Vec<String>) -> Self`
+(strict priority, mirroring the retired `ChannelConfig::from_urls`'s own
+behavior exactly), so `allez`'s own tests and
+`examples/ephemeral_smoke.rs` (both external to the `condarc` crate) can
+still build one directly without going through the full parse/expand
+pipeline.
+
+**Rationale**: A PR reviewer floated this direction
+(`discussion_r3694858120`, PR #6) as a likely eventual convergence once
+the crate's own `ResolvedChannels` type existed, then noted it wasn't
+worth further discussion in the review thread itself — not that the
+convergence shouldn't happen, only that the comment didn't need to be
+belabored there. `ChannelConfig`/`ChannelSpec`/`ChannelPriorityMode` and
+their three compensating behaviors are, on inspection, genuine
+duplicates of this ticket's own work once this ticket's channel-
+resolution capability exists: `ResolvedChannels.channels` is already
+deny-then-allow filtered (FR-019, making `filter_channels()` a
+permanent no-op) and this ticket's own `NoChannels` distinction (FR-020,
+R13) already catches every legitimately-empty case one layer earlier
+than `channels_with_fallback()` ever ran (making it unreachable dead
+code, not a safety net). This reverses this ticket's earlier "Cleanup
+boundary" conclusion (spec.md Assumptions) — that conclusion held only
+as long as GEN-24 had no fully-resolved channel list of its own to
+consume; this ticket's own delivery is what changes that premise.
+
+**Alternatives considered**:
+- *Keep the retired types and behaviors in place, unreachable* —
+  rejected: `filter_channels()`/`channels_with_fallback()` would be
+  permanently-dead code (Constitution I), and `ChannelConfig`/
+  `ChannelSpec`/`ChannelPriorityMode` would be a structurally-redundant
+  duplicate of `condarc::ResolvedChannels`/`ChannelPriority`
+  (Constitution IV) that every future reader has to keep independently
+  verifying stays in sync.
+- *Retire the types but keep `redact_channel_url` tied to a new,
+  smaller wrapper type* — rejected: a wrapper type whose only remaining
+  job is triggering a `Debug` impl adds a layer of indirection for no
+  behavior a plain function call at each format site doesn't already
+  provide.
+
 ## Test strategy
 
 - **Crate-level** (`crates/condarc/`): unit tests co-located in
@@ -637,13 +733,17 @@ violation of this invariant, before it ever reached this call site.
   so tests needing this capture stay independent of every other test
   running in parallel) — both
   co-located unit tests, not integration tests, since that function is
-  `pub(crate)`. SC-001's six-sample contract test is likewise a
-  co-located unit test inside `src/channel_config/adapt.rs`, calling
-  `adapt()` directly. Each of SC-002's five cases also asserts
+  `pub(crate)`. SC-001's five-sample test is likewise a co-located unit
+  test inside `src/channel_config/mod.rs`, asserting `Ready.config`
+  equals `condarc::expand_channels(&config)`'s own output byte-for-byte
+  — no mapping logic left to test now that `Ready.config` is
+  `condarc::ResolvedChannels` directly (R15). Each of SC-002's five cases
+  also asserts
   `ChannelConfigResolution::Ready { fallback, .. }`'s exact value
   (`None`/`Some(Rejected)`/`Some(Unreadable)`/`Some(Rejected)`/`None`,
   FR-017/R10/R11), not only `config` — plus SC-006's own case asserting
-  `NoChannels` (never a `Ready` carrying an empty `ChannelConfig`) for a
+  `NoChannels` (never a `Ready` carrying an empty channel configuration)
+  for a
   `.condarc` whose FR-019 filtering empties `channels` (R13), plus a
   second, non-filtering-caused `NoChannels` case (a `.condarc` setting
   `custom_multichannels: {defaults: []}` alone), and FR-013's

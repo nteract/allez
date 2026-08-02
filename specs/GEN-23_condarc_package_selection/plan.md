@@ -270,8 +270,7 @@ tests/
 └── support/                  # MODIFIED (FR-016, research.md R15): every fixture
                                      #       constructing/matching `ChannelConfig`/`ChannelSpec`/
                                      #       `ChannelPriorityMode` (`ephemeral.rs`,
-                                     #       `user_story_1_creation.rs`, `user_story_1_failures.rs`,
-                                     #       `user_story_2_reap.rs`, `user_story_3_defaults.rs`)
+                                     #       `creation.rs`, `failures.rs`, `defaults.rs`)
                                      #       migrated to `condarc::ResolvedChannels`/`ChannelPriority`
                                      #       — no new file here — SC-001, SC-002, SC-004,
                                      #       SC-005, and SC-006 are all co-located

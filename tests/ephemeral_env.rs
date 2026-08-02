@@ -1,8 +1,8 @@
+#[path = "support/creation.rs"]
+mod creation;
+#[path = "support/defaults.rs"]
+mod defaults;
+#[path = "support/failures.rs"]
+mod failures;
 #[path = "support/ephemeral.rs"]
 mod support;
-#[path = "support/user_story_1_creation.rs"]
-mod user_story_1_creation;
-#[path = "support/user_story_1_failures.rs"]
-mod user_story_1_failures;
-#[path = "support/user_story_3_defaults.rs"]
-mod user_story_3_defaults;

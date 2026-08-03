@@ -13,6 +13,7 @@ mod error;
 mod expand_channels;
 mod model;
 mod parse;
+mod scheme;
 mod validate;
 
 pub use error::{ErrorEntry, ErrorKind, InputRepr, Location, PathSegment, ValidationReport};

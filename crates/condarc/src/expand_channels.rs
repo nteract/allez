@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use crate::model::{ChannelPriority, Config};
+use crate::scheme::has_scheme;
 
 const DEFAULT_CHANNEL_ALIAS: &str = "https://conda.anaconda.org";
 #[cfg(not(windows))]
@@ -108,25 +109,6 @@ fn match_custom_channel(entry: &str, custom_channels: &HashMap<&str, &str>) -> O
         let (parent, _) = prefix.rsplit_once('/')?;
         prefix = parent;
     }
-}
-
-fn has_scheme(entry: &str) -> bool {
-    let bytes = entry.as_bytes();
-    let Some(first) = bytes.first() else {
-        return false;
-    };
-    if !first.is_ascii_lowercase() {
-        return false;
-    }
-
-    let mut index = 1;
-    while index < bytes.len()
-        && index < 12
-        && (bytes[index].is_ascii_lowercase() || bytes[index].is_ascii_digit())
-    {
-        index += 1;
-    }
-    bytes[index..].starts_with(b"://")
 }
 
 fn resolve_member(entry: &str, channel_alias: &str) -> Result<String, ExpandChannelsError> {

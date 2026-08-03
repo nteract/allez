@@ -4,9 +4,8 @@ use std::{
     sync::{Arc, Mutex, OnceLock},
 };
 
-use allez::ephemeral::{
-    ChannelConfig, ChannelPriorityMode, ChannelSpec, PackageSpec, RequestedPackages,
-};
+use allez::ephemeral::{PackageSpec, RequestedPackages};
+use condarc::{ChannelPriority, ResolvedChannels};
 use rattler_conda_types::Channel;
 use tracing::{Event, Subscriber, field::Visit};
 use tracing_subscriber::{Layer, layer::Context, prelude::*, registry::LookupSpan};
@@ -67,15 +66,10 @@ pub(crate) fn fixture_channel(relative: &str) -> String {
     Channel::try_from_directory(&path).unwrap().canonical_name()
 }
 
-pub(crate) fn root_fixture_config(priority: ChannelPriorityMode) -> ChannelConfig {
-    ChannelConfig {
-        channels: vec![ChannelSpec {
-            url_or_name: fixture_channel(""),
-        }],
-        channel_priority: priority,
-        allowed_channels: Vec::new(),
-        denied_channels: Vec::new(),
-    }
+pub(crate) fn root_fixture_config(priority: ChannelPriority) -> ResolvedChannels {
+    let mut config = ResolvedChannels::from_channels(vec![fixture_channel("")]);
+    config.channel_priority = priority;
+    config
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

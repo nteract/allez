@@ -29,7 +29,7 @@ mod solve;
 #[cfg(test)]
 mod cleanup_tests;
 
-pub use channels::{ChannelConfig, ChannelPriorityMode, ChannelSpec};
+pub use channels::redact_channel_url;
 pub use defaults::{DEFAULT_PACKAGES, InvalidPackageSpec, PackageSpec, RequestedPackages};
 pub use error::{ActivationError, CreationFailure, EphemeralEnvError};
 pub use lifecycle::{EnvironmentId, InstalledPackage, ReadyEnvironment};
@@ -55,7 +55,7 @@ use paths::VerifiedRoot;
 /// [`reap_ephemeral_environments`].
 pub async fn create_ephemeral_environment(
     requested: RequestedPackages,
-    channels: ChannelConfig,
+    channels: condarc::ResolvedChannels,
     default_override: Option<Vec<PackageSpec>>,
 ) -> Result<ReadyEnvironment, CreationFailure> {
     let started = Instant::now();

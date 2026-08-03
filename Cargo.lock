@@ -38,6 +38,7 @@ dependencies = [
  "assert_cmd",
  "clap",
  "condarc",
+ "dirs",
  "jsonschema",
  "predicates",
  "rattler",

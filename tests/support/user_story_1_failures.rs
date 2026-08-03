@@ -1,7 +1,5 @@
-use allez::ephemeral::{
-    ChannelConfig, ChannelPriorityMode, ChannelSpec, EphemeralEnvError,
-    create_ephemeral_environment,
-};
+use allez::ephemeral::{EphemeralEnvError, create_ephemeral_environment};
+use condarc::{ChannelPriority, ResolvedChannels};
 
 use crate::support::{TestContext, fixture_channel, package_specs, root_fixture_config};
 
@@ -14,7 +12,7 @@ async fn unresolvable_package_returns_failure_without_a_partial_directory() {
     // When
     let failure = create_ephemeral_environment(
         package_specs(&["fixture-does-not-exist"]),
-        root_fixture_config(ChannelPriorityMode::Strict),
+        root_fixture_config(ChannelPriority::Strict),
         None,
     )
     .await
@@ -31,23 +29,23 @@ async fn unresolvable_package_returns_failure_without_a_partial_directory() {
 
 #[tokio::test(flavor = "current_thread")]
 #[serial_test::serial]
-async fn denied_configured_channel_returns_no_channels() {
+async fn deny_filtered_channel_list_returns_no_channels() {
     // Given
     let context = TestContext::new("denied-channel");
     let channel = fixture_channel("");
-    let config = ChannelConfig {
-        channels: vec![ChannelSpec {
-            url_or_name: channel.clone(),
-        }],
-        channel_priority: ChannelPriorityMode::Strict,
-        allowed_channels: Vec::new(),
-        denied_channels: vec![channel],
-    };
+    let condarc = format!("channels: [\"{channel}\"]\ndenylist_channels: [\"{channel}\"]\n");
+    let config = condarc::parse(&condarc).unwrap();
+    let deny_filtered_config = condarc::expand_channels(&config).unwrap();
+    assert!(deny_filtered_config.channels.is_empty());
 
     // When
-    let failure = create_ephemeral_environment(package_specs(&["fixture-probe"]), config, None)
-        .await
-        .unwrap_err();
+    let failure = create_ephemeral_environment(
+        package_specs(&["fixture-probe"]),
+        deny_filtered_config,
+        None,
+    )
+    .await
+    .unwrap_err();
 
     // Then
     assert_eq!(failure.error, EphemeralEnvError::NoChannelsConfigured);
@@ -56,22 +54,25 @@ async fn denied_configured_channel_returns_no_channels() {
 
 #[tokio::test(flavor = "current_thread")]
 #[serial_test::serial]
-async fn channel_absent_from_non_empty_allowlist_returns_no_channels() {
+async fn allow_filtered_channel_list_returns_no_channels() {
     // Given
     let context = TestContext::new("channel-not-allowed");
-    let config = ChannelConfig {
-        channels: vec![ChannelSpec {
-            url_or_name: fixture_channel(""),
-        }],
-        channel_priority: ChannelPriorityMode::Strict,
-        allowed_channels: vec!["different-channel".to_string()],
-        denied_channels: Vec::new(),
-    };
+    let channel = fixture_channel("");
+    let condarc = format!(
+        "channels: [\"{channel}\"]\nallowlist_channels: [\"https://repo.example.org/different-channel\"]\n"
+    );
+    let config = condarc::parse(&condarc).unwrap();
+    let allow_filtered_config = condarc::expand_channels(&config).unwrap();
+    assert!(allow_filtered_config.channels.is_empty());
 
     // When
-    let failure = create_ephemeral_environment(package_specs(&["fixture-probe"]), config, None)
-        .await
-        .unwrap_err();
+    let failure = create_ephemeral_environment(
+        package_specs(&["fixture-probe"]),
+        allow_filtered_config,
+        None,
+    )
+    .await
+    .unwrap_err();
 
     // Then
     assert_eq!(failure.error, EphemeralEnvError::NoChannelsConfigured);
@@ -87,7 +88,7 @@ async fn corrupt_checksum_returns_integrity_failure_without_a_partial_directory(
     // When
     let failure = create_ephemeral_environment(
         package_specs(&["fixture-corrupt-checksum"]),
-        root_fixture_config(ChannelPriorityMode::Strict),
+        root_fixture_config(ChannelPriority::Strict),
         None,
     )
     .await
@@ -106,15 +107,10 @@ async fn corrupt_checksum_returns_integrity_failure_without_a_partial_directory(
 
 #[tokio::test(flavor = "current_thread")]
 #[serial_test::serial]
-async fn denied_defaults_fallback_returns_no_channels_without_network() {
+async fn empty_resolved_channels_return_no_channels_without_network() {
     // Given
     let context = TestContext::new("denied-defaults-fallback");
-    let config = ChannelConfig {
-        channels: Vec::new(),
-        channel_priority: ChannelPriorityMode::Strict,
-        allowed_channels: Vec::new(),
-        denied_channels: vec!["defaults".to_string()],
-    };
+    let config = ResolvedChannels::from_channels(Vec::new());
 
     // When
     let failure = create_ephemeral_environment(package_specs(&["fixture-probe"]), config, None)
@@ -148,7 +144,7 @@ async fn root_resolution_failure_does_not_attempt_cleanup() {
     // When
     let failure = create_ephemeral_environment(
         package_specs(&["fixture-probe"]),
-        root_fixture_config(ChannelPriorityMode::Strict),
+        root_fixture_config(ChannelPriority::Strict),
         None,
     )
     .await

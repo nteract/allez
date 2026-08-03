@@ -8,7 +8,7 @@
 //! Run with: `ALLEZ_EPHEMERAL_ROOT=/tmp/allez-smoke cargo run --example ephemeral_smoke`
 
 use allez::ephemeral::{
-    ChannelConfig, RequestedPackages, create_ephemeral_environment, reap_ephemeral_environments,
+    RequestedPackages, create_ephemeral_environment, reap_ephemeral_environments,
 };
 
 #[tokio::main]
@@ -16,7 +16,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/ephemeral_channel");
     let channel_url = rattler_conda_types::Channel::try_from_directory(&fixture)?.canonical_name();
-    let channels = ChannelConfig::from_urls(vec![channel_url]);
+    let channels = condarc::ResolvedChannels::from_channels(vec![channel_url]);
     let ready = create_ephemeral_environment(
         RequestedPackages::Explicit(vec![allez::ephemeral::PackageSpec::parse("fixture-probe")?]),
         channels,

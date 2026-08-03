@@ -175,7 +175,7 @@ mod tests {
     use rattler_conda_types::Channel;
 
     use super::install_packages;
-    use crate::ephemeral::{ChannelConfig, EphemeralEnvError, PackageSpec};
+    use crate::ephemeral::{EphemeralEnvError, PackageSpec};
 
     fn fixture_channel_url() -> String {
         let fixture_directory =
@@ -194,7 +194,7 @@ mod tests {
         let packages = vec![PackageSpec::parse("fixture-corrupt-checksum").unwrap()];
         let solution = super::super::solve::solve_packages(
             &root,
-            &ChannelConfig::from_urls(vec![fixture_channel_url()]),
+            &condarc::ResolvedChannels::from_channels(vec![fixture_channel_url()]),
             &packages,
         )
         .await

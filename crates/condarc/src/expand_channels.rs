@@ -510,4 +510,26 @@ mod tests {
             })
         );
     }
+
+    #[test]
+    fn expand_channels_resolves_allowlist_and_denylist_entries_through_custom_channels() {
+        let config = Config {
+            channels: Some(strings(&["acme", "other", "extra"])),
+            channel_alias: Some("https://conda.example.org".to_string()),
+            custom_channels: Some(BTreeMap::from([(
+                "acme".to_string(),
+                "https://internal.example.com".to_string(),
+            )])),
+            allowlist_channels: Some(strings(&["acme", "other"])),
+            denylist_channels: Some(strings(&["other"])),
+            ..Config::default()
+        };
+
+        let resolved = expand_channels(&config).unwrap();
+
+        assert_eq!(
+            resolved.channels,
+            strings(&["https://internal.example.com/acme"])
+        );
+    }
 }

@@ -2,13 +2,13 @@
 //! caller-unpathed conda environment. See
 //! `specs/GEN-24_ephemeral_env_core/` for the full spec/plan/contract.
 //!
-//! **Teardown is explicit, not automatic.** An environment this module
-//! successfully creates stays on disk, usable, until a caller later calls
-//! [`crate::ephemeral::reap_ephemeral_environments`] — there is no
-//! per-environment RAII cleanup guard, no lock-file-based liveness
-//! tracking, and no automatic orphan reclamation any more. See the
-//! spec's "Explicit reap, no automatic reaping" decision for the full
-//! rationale.
+//! **There is no teardown.** An environment this module successfully
+//! creates stays on disk, usable, indefinitely — not just for the
+//! lifetime of the creating process, but past its normal exit or an
+//! abrupt crash too — since there is no per-environment RAII cleanup
+//! guard, no lock-file-based liveness tracking, no automatic orphan
+//! reclamation, and no caller-invoked removal API. Only a failed creation
+//! attempt is rolled back (see `fail_and_roll_back`).
 
 use std::time::Instant;
 
@@ -23,7 +23,6 @@ mod install;
 mod lifecycle;
 mod paths;
 mod permissions;
-mod reap;
 mod solve;
 
 #[cfg(test)]
@@ -33,7 +32,6 @@ pub use channels::redact_channel_url;
 pub use defaults::{DEFAULT_PACKAGES, InvalidPackageSpec, PackageSpec, RequestedPackages};
 pub use error::{ActivationError, CreationFailure, EphemeralEnvError};
 pub use lifecycle::{EnvironmentId, InstalledPackage, ReadyEnvironment};
-pub use reap::ReapOutcome;
 
 use cleanup::remove_prefix_dir;
 use events::{EPHEMERAL_EVENT_SCHEMA_VERSION, EphemeralLifecycleEvent, emit_event};
@@ -50,9 +48,7 @@ use paths::VerifiedRoot;
 ///
 /// The returned [`ReadyEnvironment`] is **not** torn down when it (or its
 /// last clone) is dropped, and there is no way to signal teardown for a
-/// single environment any more — see this module's own doc comment. It
-/// stays on disk until a caller later calls
-/// [`reap_ephemeral_environments`].
+/// single environment any more — see this module's own doc comment.
 pub async fn create_ephemeral_environment(
     requested: RequestedPackages,
     channels: condarc::ResolvedChannels,
@@ -122,22 +118,6 @@ pub async fn create_ephemeral_environment(
     Ok(ReadyEnvironment::new(id, prefix, installed_packages))
 }
 
-/// Removes every ephemeral environment found on disk for the current
-/// local user account and `allez` installation — unconditionally, without
-/// attempting to detect whether one is still in use elsewhere. Callers
-/// are responsible for only invoking this when doing so is safe (e.g. no
-/// other concurrent `allez` invocation still needs a live environment).
-/// See this module's own doc comment.
-///
-/// # Errors
-///
-/// Returns [`EphemeralEnvError::UnwritableLocation`] if the root itself
-/// cannot be securely opened or created.
-pub fn reap_ephemeral_environments() -> Result<Vec<ReapOutcome>, EphemeralEnvError> {
-    let root = paths::resolve_root()?;
-    reap::reap_all(&root)
-}
-
 /// Reports a solve/install failure and rolls back whatever directory
 /// `create_environment_directory` created for this attempt — the closed
 /// question of whether that rollback itself succeeded is reported
@@ -176,16 +156,29 @@ async fn fail_and_roll_back(
     }
 }
 
-fn emit_success(id: EnvironmentId, operation: &'static str, started: Instant, packages: &[String]) {
+/// Shared by [`emit_success`]/[`emit_failure`]: both construct an
+/// identical `EphemeralLifecycleEvent`, differing only in `outcome`/`failure_category`.
+fn emit_outcome(
+    id: EnvironmentId,
+    operation: &'static str,
+    started: Instant,
+    packages: &[String],
+    outcome: &'static str,
+    failure_category: Option<&'static str>,
+) {
     emit_event(&EphemeralLifecycleEvent {
         schema_version: EPHEMERAL_EVENT_SCHEMA_VERSION,
         environment_id: id,
         operation,
         packages: packages.to_vec(),
         duration_ms: elapsed_milliseconds(started),
-        outcome: "success",
-        failure_category: None,
+        outcome,
+        failure_category,
     });
+}
+
+fn emit_success(id: EnvironmentId, operation: &'static str, started: Instant, packages: &[String]) {
+    emit_outcome(id, operation, started, packages, "success", None);
 }
 
 fn emit_failure(
@@ -195,15 +188,14 @@ fn emit_failure(
     packages: &[String],
     error: &EphemeralEnvError,
 ) {
-    emit_event(&EphemeralLifecycleEvent {
-        schema_version: EPHEMERAL_EVENT_SCHEMA_VERSION,
-        environment_id: id,
+    emit_outcome(
+        id,
         operation,
-        packages: packages.to_vec(),
-        duration_ms: elapsed_milliseconds(started),
-        outcome: "failure",
-        failure_category: Some(CategorizedError::category(error)),
-    });
+        started,
+        packages,
+        "failure",
+        Some(CategorizedError::category(error)),
+    );
 }
 
 fn elapsed_milliseconds(started: Instant) -> u64 {

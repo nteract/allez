@@ -183,7 +183,7 @@ mod tests {
 
         tracing::subscriber::with_default(subscriber, action);
 
-        Arc::try_unwrap(captured).unwrap().into_inner().unwrap()
+        captured.lock().unwrap().clone()
     }
 
     fn default_resolved_channels() -> condarc::ResolvedChannels {

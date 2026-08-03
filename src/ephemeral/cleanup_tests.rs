@@ -1,9 +1,21 @@
-use super::{cleanup::remove_prefix_dir, lifecycle::EnvironmentId, paths::verified_root};
+use super::{
+    cleanup::remove_prefix_dir,
+    lifecycle::EnvironmentId,
+    paths::{VerifiedRoot, verified_root},
+};
+
+/// Shared by every test below: a fresh temporary, verified root. The
+/// returned `TempDir` must be kept alive alongside `VerifiedRoot` --
+/// dropping it early removes the directory `VerifiedRoot` still refers to.
+fn test_root() -> (tempfile::TempDir, VerifiedRoot) {
+    let temp = tempfile::tempdir().unwrap();
+    let root = verified_root(&temp.path().join("root")).unwrap();
+    (temp, root)
+}
 
 #[test]
 fn remove_prefix_dir_removes_a_nested_environment_tree() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = verified_root(&temp.path().join("root")).unwrap();
+    let (_temp, root) = test_root();
     let id = EnvironmentId::new();
     let location = super::permissions::create_environment_directory(&root, id).unwrap();
     let nested = location.join("nested");
@@ -19,8 +31,7 @@ fn remove_prefix_dir_removes_a_nested_environment_tree() {
 fn remove_prefix_dir_rejects_a_symlink_target_without_following_it() {
     use std::os::unix::fs::symlink;
 
-    let temp = tempfile::tempdir().unwrap();
-    let root = verified_root(&temp.path().join("root")).unwrap();
+    let (temp, root) = test_root();
     let id = EnvironmentId::new();
     let target = temp.path().join("outside");
     std::fs::create_dir(&target).unwrap();
@@ -36,8 +47,7 @@ fn remove_prefix_dir_rejects_a_symlink_target_without_following_it() {
 
 #[test]
 fn remove_prefix_dir_on_a_never_created_environment_fails() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = verified_root(&temp.path().join("root")).unwrap();
+    let (_temp, root) = test_root();
     let id = EnvironmentId::new();
 
     let error = remove_prefix_dir(&root, id).unwrap_err();

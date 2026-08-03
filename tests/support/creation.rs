@@ -1,10 +1,10 @@
-use std::{collections::BTreeSet, process::Command};
+use std::process::Command;
 
 use allez::ephemeral::{DEFAULT_PACKAGES, RequestedPackages, create_ephemeral_environment};
 use condarc::{ChannelPriority, ResolvedChannels};
 
 use crate::support::{
-    EventCapture, TestContext, fixture_channel, package_specs, root_fixture_config,
+    EventCapture, TestContext, fixture_channel, installed_names, package_specs, root_fixture_config,
 };
 
 #[tokio::test(flavor = "current_thread")]
@@ -25,11 +25,7 @@ async fn resolvable_packages_are_installed_and_the_probe_is_usable() {
 
     // Then
     assert!(ready.location.is_dir());
-    let installed = ready
-        .installed_packages
-        .iter()
-        .map(|package| package.name.as_str())
-        .collect::<BTreeSet<_>>();
+    let installed = installed_names(&ready);
     assert!(requested.iter().all(|package| installed.contains(package)));
     let overlay = ready.activation_environment().unwrap();
     #[cfg(unix)]
@@ -56,11 +52,7 @@ async fn empty_package_list_installs_built_in_defaults() {
     .unwrap();
 
     // Then
-    let installed = ready
-        .installed_packages
-        .iter()
-        .map(|package| package.name.as_str())
-        .collect::<BTreeSet<_>>();
+    let installed = installed_names(&ready);
     assert_eq!(installed, DEFAULT_PACKAGES.iter().copied().collect());
 }
 
@@ -183,6 +175,29 @@ async fn a_solve_stage_failure_still_emits_an_install_failure_event() {
         install_failure.failure_category.as_deref(),
         Some("unresolvable_package")
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[serial_test::serial]
+async fn a_ready_environment_is_not_torn_down_on_its_own() {
+    // Given
+    let _context = TestContext::new("no-automatic-teardown");
+
+    // When
+    let ready = create_ephemeral_environment(
+        package_specs(&["fixture-probe"]),
+        root_fixture_config(ChannelPriority::Strict),
+        None,
+    )
+    .await
+    .unwrap();
+    let location = ready.location.clone();
+    drop(ready);
+
+    // Then: dropping every reference to the `ReadyEnvironment` has no
+    // effect -- there is no RAII cleanup guard, and (since GEN-24's later
+    // revision removed `reap_ephemeral_environments`) no removal API at all.
+    assert!(location.is_dir());
 }
 
 #[cfg(feature = "network-tests")]

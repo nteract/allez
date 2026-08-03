@@ -1,8 +1,9 @@
 //! Resolves parsed `.condarc` channel preferences into concrete channel identifiers.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use crate::model::{ChannelPriority, Config};
+use crate::scheme::has_scheme;
 
 const DEFAULT_CHANNEL_ALIAS: &str = "https://conda.anaconda.org";
 #[cfg(not(windows))]
@@ -95,7 +96,7 @@ impl std::error::Error for ExpandChannelsError {}
 struct ResolveContext<'a> {
     channel_alias: &'a str,
     custom_channels: HashMap<&'a str, &'a str>,
-    custom_multichannels: &'a BTreeMap<String, Vec<String>>,
+    custom_multichannels: HashMap<&'a str, &'a [String]>,
     default_channels: Vec<&'a str>,
 }
 
@@ -108,25 +109,6 @@ fn match_custom_channel(entry: &str, custom_channels: &HashMap<&str, &str>) -> O
         let (parent, _) = prefix.rsplit_once('/')?;
         prefix = parent;
     }
-}
-
-fn has_scheme(entry: &str) -> bool {
-    let bytes = entry.as_bytes();
-    let Some(first) = bytes.first() else {
-        return false;
-    };
-    if !first.is_ascii_lowercase() {
-        return false;
-    }
-
-    let mut index = 1;
-    while index < bytes.len()
-        && index < 12
-        && (bytes[index].is_ascii_lowercase() || bytes[index].is_ascii_digit())
-    {
-        index += 1;
-    }
-    bytes[index..].starts_with(b"://")
 }
 
 fn resolve_member(entry: &str, channel_alias: &str) -> Result<String, ExpandChannelsError> {
@@ -221,11 +203,13 @@ pub fn expand_channels(config: &Config) -> Result<ResolvedChannels, ExpandChanne
             .collect(),
         None => DEFAULT_CUSTOM_CHANNELS.iter().copied().collect(),
     };
-    let empty_custom_multichannels = BTreeMap::new();
-    let custom_multichannels = config
-        .custom_multichannels
-        .as_ref()
-        .unwrap_or(&empty_custom_multichannels);
+    let custom_multichannels = match &config.custom_multichannels {
+        Some(multichannels) => multichannels
+            .iter()
+            .map(|(name, members)| (name.as_str(), members.as_slice()))
+            .collect(),
+        None => HashMap::new(),
+    };
     let default_channels = match &config.default_channels {
         Some(channels) => channels.iter().map(String::as_str).collect(),
         None => DEFAULT_CHANNELS.to_vec(),
@@ -271,13 +255,18 @@ pub fn expand_channels(config: &Config) -> Result<ResolvedChannels, ExpandChanne
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
 
     fn empty_context(custom_multichannels: &BTreeMap<String, Vec<String>>) -> ResolveContext<'_> {
         ResolveContext {
             channel_alias: "https://conda.example.org",
             custom_channels: HashMap::new(),
-            custom_multichannels,
+            custom_multichannels: custom_multichannels
+                .iter()
+                .map(|(name, members)| (name.as_str(), members.as_slice()))
+                .collect(),
             default_channels: Vec::new(),
         }
     }
@@ -519,6 +508,28 @@ mod tests {
             Err(ExpandChannelsError::EmptyChannelAlias {
                 entry: "community".to_string(),
             })
+        );
+    }
+
+    #[test]
+    fn expand_channels_resolves_allowlist_and_denylist_entries_through_custom_channels() {
+        let config = Config {
+            channels: Some(strings(&["acme", "other", "extra"])),
+            channel_alias: Some("https://conda.example.org".to_string()),
+            custom_channels: Some(BTreeMap::from([(
+                "acme".to_string(),
+                "https://internal.example.com".to_string(),
+            )])),
+            allowlist_channels: Some(strings(&["acme", "other"])),
+            denylist_channels: Some(strings(&["other"])),
+            ..Config::default()
+        };
+
+        let resolved = expand_channels(&config).unwrap();
+
+        assert_eq!(
+            resolved.channels,
+            strings(&["https://internal.example.com/acme"])
         );
     }
 }

@@ -3,25 +3,16 @@ use std::collections::BTreeSet;
 use allez::ephemeral::{DEFAULT_PACKAGES, RequestedPackages, create_ephemeral_environment};
 use condarc::ChannelPriority;
 
-use crate::support::{TestContext, package_specs, root_fixture_config};
-
-fn installed_names(ready: &allez::ephemeral::ReadyEnvironment) -> BTreeSet<&str> {
-    ready
-        .installed_packages
-        .iter()
-        .map(|package| package.name.as_str())
-        .collect()
-}
+use crate::support::{
+    TestContext, explicit_package_specs, installed_names, package_specs, root_fixture_config,
+};
 
 #[tokio::test(flavor = "current_thread")]
 #[serial_test::serial]
 async fn no_packages_with_an_override_installs_the_override_instead_of_defaults() {
     // Given
     let _context = TestContext::new("override-instead-of-defaults");
-    let RequestedPackages::Explicit(override_packages) = package_specs(&["fixture-default-beta"])
-    else {
-        unreachable!("package_specs always returns Explicit")
-    };
+    let override_packages = explicit_package_specs(&["fixture-default-beta"]);
 
     // When
     let ready = create_ephemeral_environment(
@@ -44,10 +35,7 @@ async fn no_packages_with_an_override_installs_the_override_instead_of_defaults(
 async fn explicit_packages_alongside_an_override_ignore_the_override_entirely() {
     // Given
     let _context = TestContext::new("explicit-wins-over-override");
-    let RequestedPackages::Explicit(override_packages) = package_specs(&["fixture-default-beta"])
-    else {
-        unreachable!("package_specs always returns Explicit")
-    };
+    let override_packages = explicit_package_specs(&["fixture-default-beta"]);
 
     // When
     let ready = create_ephemeral_environment(

@@ -104,6 +104,40 @@ fn exit_with_error(category: &str, message: &str, human: bool) -> ! {
     std::process::exit(2);
 }
 
+/// Exits with a usage error when `result` (a pass-through-command
+/// validation outcome) is `Err`; no-op otherwise. Shared by every
+/// `dispatch` arm that validates a pass-through command before running
+/// its handler.
+fn exit_on_invalid_pass_through(
+    operation: &'static str,
+    result: Result<(), AllezError>,
+    human: bool,
+) {
+    if let Err(err) = result {
+        tracing::warn!(operation, category = err.category(), "usage error");
+        exit_with_error(err.category(), &err.to_string(), human);
+    }
+}
+
+/// Traces a successful dispatch, then renders and prints the handler's
+/// output. `render` is deferred (not a pre-computed `&str`) so the trace
+/// fires before the handler runs, matching this crate's pre-existing
+/// event-then-effect ordering elsewhere (e.g. `emit_failure` in
+/// `ephemeral/mod.rs`, which also traces before performing rollback).
+/// `packages` mirrors the per-arm `tracing::info!` field some handlers
+/// (`oneshot`, `create`) attach and others omit.
+fn emit_stub_success(
+    operation: &'static str,
+    packages: Option<usize>,
+    render: impl FnOnce() -> String,
+) {
+    match packages {
+        Some(count) => tracing::info!(operation, packages = count, result = "stub_success"),
+        None => tracing::info!(operation, result = "stub_success"),
+    }
+    println!("{}", render());
+}
+
 /// The `Oneshot`/`Run` arms call [`cli::validate_pass_through`] before
 /// invoking the handler; a missing pass-through command exits `2` without
 /// the handler ever running. The `Sandbox` arm calls
@@ -119,52 +153,46 @@ fn dispatch(cli: Cli) {
     let operation = cli.command.name();
     match cli.command {
         Commands::Oneshot(args) => {
-            if let Err(err) = cli::validate_pass_through(&args.pass_through) {
-                tracing::warn!(operation, category = err.category(), "usage error");
-                exit_with_error(err.category(), &err.to_string(), cli.human);
-            }
-            tracing::info!(
+            exit_on_invalid_pass_through(
                 operation,
-                packages = args.packages.len(),
-                result = "stub_success"
+                cli::validate_pass_through(&args.pass_through),
+                cli.human,
             );
-            println!("{}", cli::oneshot::run(&args, cli.human, cli.verbose));
+            emit_stub_success(operation, Some(args.packages.len()), || {
+                cli::oneshot::run(&args, cli.human, cli.verbose)
+            });
         }
         Commands::Create(args) => {
-            tracing::info!(
-                operation,
-                packages = args.packages.len(),
-                result = "stub_success"
-            );
-            println!("{}", cli::create::run(&args, cli.human));
+            emit_stub_success(operation, Some(args.packages.len()), || {
+                cli::create::run(&args, cli.human)
+            });
         }
         Commands::Run(args) => {
-            if let Err(err) = cli::validate_pass_through(&args.pass_through) {
-                tracing::warn!(operation, category = err.category(), "usage error");
-                exit_with_error(err.category(), &err.to_string(), cli.human);
-            }
-            tracing::info!(operation, result = "stub_success");
-            println!("{}", cli::run::run(&args, cli.human, cli.verbose));
+            exit_on_invalid_pass_through(
+                operation,
+                cli::validate_pass_through(&args.pass_through),
+                cli.human,
+            );
+            emit_stub_success(operation, None, || {
+                cli::run::run(&args, cli.human, cli.verbose)
+            });
         }
         Commands::Sandbox(sandbox_args) => {
             let raw_args: Vec<std::ffi::OsString> = std::env::args_os().collect();
-            if let Err(err) = cli::sandbox_missing_command(&sandbox_args.pass_through, &raw_args) {
-                tracing::warn!(operation, category = err.category(), "usage error");
-                exit_with_error(err.category(), &err.to_string(), cli.human);
-            }
-            tracing::info!(operation, result = "stub_success");
-            println!(
-                "{}",
-                cli::sandbox::run(&sandbox_args.pass_through, cli.human, cli.verbose)
+            exit_on_invalid_pass_through(
+                operation,
+                cli::sandbox_missing_command(&sandbox_args.pass_through, &raw_args),
+                cli.human,
             );
+            emit_stub_success(operation, None, || {
+                cli::sandbox::run(&sandbox_args.pass_through, cli.human, cli.verbose)
+            });
         }
         Commands::List => {
-            tracing::info!(operation, result = "stub_success");
-            println!("{}", cli::list::run(cli.human));
+            emit_stub_success(operation, None, || cli::list::run(cli.human));
         }
         Commands::Remove(args) => {
-            tracing::info!(operation, result = "stub_success");
-            println!("{}", cli::remove::run(&args, cli.human));
+            emit_stub_success(operation, None, || cli::remove::run(&args, cli.human));
         }
     }
 }

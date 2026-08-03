@@ -152,36 +152,36 @@ pub(crate) fn coerce_list_fields_seq(
     Ok(Some(dedup_preserving_order(out)))
 }
 
-/// `StringMap` — `MapParameter(str)` (FR-023).
-pub(crate) fn coerce_string_map(
+/// Shared by [`coerce_string_map`]/[`coerce_nullable_string_map`]: both gate on
+/// [`map_entries`] and coerce every value the same way, differing only in which
+/// per-value coercer runs and the resulting value type.
+fn coerce_map_values<T>(
     value: &RawValue,
-) -> Result<Option<BTreeMap<String, String>>, CoercionError> {
+    coerce: impl Fn(&RawValue) -> Result<T, CoercionError>,
+) -> Result<Option<BTreeMap<String, T>>, CoercionError> {
     let Some(entries) = map_entries(value)? else {
         return Ok(None);
     };
     let mut out = BTreeMap::new();
     for (key, raw) in entries {
-        let coerced = strings::coerce_plain_string(&raw)
-            .map_err(|e| e.nest(PathSegment::Key { key: key.clone() }))?;
+        let coerced = coerce(&raw).map_err(|e| e.nest(PathSegment::Key { key: key.clone() }))?;
         out.insert(key, coerced);
     }
     Ok(Some(out))
+}
+
+/// `StringMap` — `MapParameter(str)` (FR-023).
+pub(crate) fn coerce_string_map(
+    value: &RawValue,
+) -> Result<Option<BTreeMap<String, String>>, CoercionError> {
+    coerce_map_values(value, strings::coerce_plain_string)
 }
 
 /// `NullableStringMap` — `MapParameter((str, None))` (FR-023).
 pub(crate) fn coerce_nullable_string_map(
     value: &RawValue,
 ) -> Result<Option<BTreeMap<String, Option<String>>>, CoercionError> {
-    let Some(entries) = map_entries(value)? else {
-        return Ok(None);
-    };
-    let mut out = BTreeMap::new();
-    for (key, raw) in entries {
-        let coerced = strings::coerce_nullable_string(&raw)
-            .map_err(|e| e.nest(PathSegment::Key { key: key.clone() }))?;
-        out.insert(key, coerced);
-    }
-    Ok(Some(out))
+    coerce_map_values(value, strings::coerce_nullable_string)
 }
 
 /// `StringSeqMap` — `MapParameter(SequenceParameter(str))` (`custom_multichannels` only,

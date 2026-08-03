@@ -15,38 +15,20 @@ use crate::catalog::CATALOG;
 use crate::error::{ErrorEntry, ErrorKind, InputRepr, Location};
 use crate::model::{Config, ParseOptions, SslVerify};
 use crate::parse::RawValue;
+use crate::scheme::is_valid_channel_alias;
 
 /// `channel_alias` (FR-025): a non-empty value must have a URL scheme matching conda's
 /// `has_scheme` rule — `^[a-z][a-z0-9]{0,11}://` — anchored at the start of the string; an empty
-/// string is accepted. Returns `Some(message)` iff `value` is invalid.
+/// string is accepted. Returns `Some(message)` iff `value` is invalid. Delegates to
+/// [`crate::scheme::is_valid_channel_alias`] rather than re-deriving the pattern here.
 pub(crate) fn channel_alias_error(value: &str) -> Option<String> {
-    if has_valid_channel_alias_scheme(value) {
+    if is_valid_channel_alias(value) {
         None
     } else {
         Some(format!(
             "{value:?} must start with a URL scheme matching '^[a-z][a-z0-9]{{0,11}}://', or be empty"
         ))
     }
-}
-
-/// conda's `has_scheme`: the scheme is a run of `[a-z][a-z0-9]{0,11}` (so 1–12 characters total)
-/// at the very start of the string, immediately followed by the literal `://`. Since `:` is not
-/// itself a valid scheme character, greedily consuming as many `[a-z0-9]` characters as allowed
-/// and then checking for `://` is equivalent to the regex (no backtracking is ever needed).
-fn has_valid_channel_alias_scheme(value: &str) -> bool {
-    if value.is_empty() {
-        return true;
-    }
-    let bytes = value.as_bytes();
-    if !bytes[0].is_ascii_lowercase() {
-        return false;
-    }
-    let mut i = 1;
-    while i < bytes.len() && i < 12 && (bytes[i].is_ascii_lowercase() || bytes[i].is_ascii_digit())
-    {
-        i += 1;
-    }
-    value[i..].starts_with("://")
 }
 
 /// `default_python` (FR-026, A4): an empty string is "no pinning" and always accepted (a `null`
@@ -248,6 +230,11 @@ mod tests {
         // non-empty string that starts directly with "://" has zero scheme characters and must
         // still be rejected (only the *fully empty* string is the accepted special case).
         assert!(channel_alias_error("://host").is_some());
+    }
+
+    #[test]
+    fn channel_alias_rejects_a_scheme_like_marker_that_starts_later_in_the_value() {
+        assert!(channel_alias_error("wrong/scheme://host").is_some());
     }
 
     #[test]

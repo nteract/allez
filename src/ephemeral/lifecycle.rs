@@ -20,10 +20,6 @@ impl EnvironmentId {
     pub fn new() -> Self {
         Self(Ulid::new())
     }
-
-    pub(crate) fn parse(value: &str) -> Option<Self> {
-        value.parse().ok().map(Self)
-    }
 }
 
 impl Default for EnvironmentId {
@@ -125,12 +121,11 @@ mod tests {
 
 /// A successfully created environment and its installed packages.
 ///
-/// **Not torn down automatically** — see the GEN-24 spec's "Explicit
-/// reap, no automatic reaping" decision: this value carries no cleanup
-/// guard of any kind, and dropping it (or every clone of it) has no
-/// effect on the environment's directory. The environment persists on
-/// disk until a caller explicitly calls
-/// [`super::reap_ephemeral_environments`].
+/// **Never torn down** — this value carries no cleanup guard of any
+/// kind, dropping it (or every clone of it) has no effect on the
+/// environment's directory, and there is no API to remove it afterward.
+/// The environment persists on disk indefinitely, including past the
+/// creating process's normal exit or an abrupt crash.
 #[derive(Debug, Clone)]
 pub struct ReadyEnvironment {
     /// This environment's stable identifier.

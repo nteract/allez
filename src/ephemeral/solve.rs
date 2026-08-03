@@ -125,12 +125,20 @@ mod tests {
     use super::solve_packages;
     use crate::ephemeral::{EphemeralEnvError, PackageSpec};
 
-    #[tokio::test]
-    async fn solve_packages_when_channels_are_empty_returns_no_channels() {
-        // Given
+    /// Shared by every test below: a fresh temporary, verified root. The
+    /// returned `TempDir` must be kept alive alongside `VerifiedRoot` --
+    /// dropping it early removes the directory `VerifiedRoot` still refers to.
+    fn test_root() -> (tempfile::TempDir, super::super::paths::VerifiedRoot) {
         let temporary_directory = tempfile::tempdir().unwrap();
         let root =
             super::super::paths::verified_root(&temporary_directory.path().join("root")).unwrap();
+        (temporary_directory, root)
+    }
+
+    #[tokio::test]
+    async fn solve_packages_when_channels_are_empty_returns_no_channels() {
+        // Given
+        let (_temporary_directory, root) = test_root();
         let config = condarc::ResolvedChannels::from_channels(Vec::new());
         let packages = vec![PackageSpec::parse("fixture-default-alpha").unwrap()];
 
@@ -147,9 +155,7 @@ mod tests {
     #[tokio::test]
     async fn channel_parse_failure_is_not_attributed_to_the_first_package() {
         // Given
-        let temporary_directory = tempfile::tempdir().unwrap();
-        let root =
-            super::super::paths::verified_root(&temporary_directory.path().join("root")).unwrap();
+        let (_temporary_directory, root) = test_root();
         let config = condarc::ResolvedChannels::from_channels(vec!["https://[".to_string()]);
         let packages = vec![
             PackageSpec::parse("known-good-first").unwrap(),
@@ -166,9 +172,7 @@ mod tests {
     #[tokio::test]
     async fn multi_package_solver_failure_is_not_attributed_to_the_first_package() {
         // Given
-        let temporary_directory = tempfile::tempdir().unwrap();
-        let root =
-            super::super::paths::verified_root(&temporary_directory.path().join("root")).unwrap();
+        let (_temporary_directory, root) = test_root();
         let fixture_directory =
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ephemeral_channel");
         let channel = Channel::try_from_directory(&fixture_directory)

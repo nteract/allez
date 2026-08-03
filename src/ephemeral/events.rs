@@ -128,10 +128,17 @@ mod tests {
         }
     }
 
-    #[test]
-    fn emitted_event_carries_schema_version_and_stable_environment_id() {
+    /// Shared by the capture tests below: emits `event` under a fresh
+    /// subscriber and returns every field it recorded, joined by spaces.
+    fn captured_fields(event: &EphemeralLifecycleEvent) -> String {
         let captured = Arc::new(Mutex::new(Vec::new()));
         let subscriber = tracing_subscriber::registry().with(CapturedFields(Arc::clone(&captured)));
+        tracing::subscriber::with_default(subscriber, || emit_event(event));
+        captured.lock().unwrap().join(" ")
+    }
+
+    #[test]
+    fn emitted_event_carries_schema_version_and_stable_environment_id() {
         let environment_id = EnvironmentId::new();
         let expected_id = environment_id.to_string();
         let event = EphemeralLifecycleEvent {
@@ -144,17 +151,14 @@ mod tests {
             failure_category: None,
         };
 
-        tracing::subscriber::with_default(subscriber, || emit_event(&event));
+        let fields = captured_fields(&event);
 
-        let fields = captured.lock().unwrap().join(" ");
         assert!(fields.contains(EPHEMERAL_EVENT_SCHEMA_VERSION));
         assert!(fields.contains(&expected_id));
     }
 
     #[test]
     fn emitted_event_never_contains_channel_credentials() {
-        let captured = Arc::new(Mutex::new(Vec::new()));
-        let subscriber = tracing_subscriber::registry().with(CapturedFields(Arc::clone(&captured)));
         let event = EphemeralLifecycleEvent {
             schema_version: EPHEMERAL_EVENT_SCHEMA_VERSION,
             environment_id: EnvironmentId::new(),
@@ -167,9 +171,8 @@ mod tests {
             failure_category: Some("unresolvable_package"),
         };
 
-        tracing::subscriber::with_default(subscriber, || emit_event(&event));
+        let fields = captured_fields(&event);
 
-        let fields = captured.lock().unwrap().join(" ");
         assert!(!fields.contains("user:password"));
         assert!(!fields.contains("token-123"));
         assert!(fields.contains("https://repo.example/conda-forge"));

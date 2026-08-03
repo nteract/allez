@@ -1,10 +1,11 @@
 use std::{
+    collections::BTreeSet,
     env,
     path::PathBuf,
     sync::{Arc, Mutex, OnceLock},
 };
 
-use allez::ephemeral::{PackageSpec, RequestedPackages};
+use allez::ephemeral::{PackageSpec, ReadyEnvironment, RequestedPackages};
 use condarc::{ChannelPriority, ResolvedChannels};
 use rattler_conda_types::Channel;
 use tracing::{Event, Subscriber, field::Visit};
@@ -57,6 +58,15 @@ pub(crate) fn package_specs(packages: &[&str]) -> RequestedPackages {
             .map(|package| PackageSpec::parse(package).unwrap())
             .collect(),
     )
+}
+
+/// The name of every package a `create_ephemeral_environment` call installed.
+pub(crate) fn installed_names(ready: &ReadyEnvironment) -> BTreeSet<&str> {
+    ready
+        .installed_packages
+        .iter()
+        .map(|package| package.name.as_str())
+        .collect()
 }
 
 pub(crate) fn fixture_channel(relative: &str) -> String {

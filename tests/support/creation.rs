@@ -1,10 +1,10 @@
-use std::{collections::BTreeSet, process::Command};
+use std::process::Command;
 
 use allez::ephemeral::{DEFAULT_PACKAGES, RequestedPackages, create_ephemeral_environment};
 use condarc::{ChannelPriority, ResolvedChannels};
 
 use crate::support::{
-    EventCapture, TestContext, fixture_channel, package_specs, root_fixture_config,
+    EventCapture, TestContext, fixture_channel, installed_names, package_specs, root_fixture_config,
 };
 
 #[tokio::test(flavor = "current_thread")]
@@ -25,11 +25,7 @@ async fn resolvable_packages_are_installed_and_the_probe_is_usable() {
 
     // Then
     assert!(ready.location.is_dir());
-    let installed = ready
-        .installed_packages
-        .iter()
-        .map(|package| package.name.as_str())
-        .collect::<BTreeSet<_>>();
+    let installed = installed_names(&ready);
     assert!(requested.iter().all(|package| installed.contains(package)));
     let overlay = ready.activation_environment().unwrap();
     #[cfg(unix)]
@@ -56,11 +52,7 @@ async fn empty_package_list_installs_built_in_defaults() {
     .unwrap();
 
     // Then
-    let installed = ready
-        .installed_packages
-        .iter()
-        .map(|package| package.name.as_str())
-        .collect::<BTreeSet<_>>();
+    let installed = installed_names(&ready);
     assert_eq!(installed, DEFAULT_PACKAGES.iter().copied().collect());
 }
 

@@ -3,15 +3,7 @@ use std::collections::BTreeSet;
 use allez::ephemeral::{DEFAULT_PACKAGES, RequestedPackages, create_ephemeral_environment};
 use condarc::ChannelPriority;
 
-use crate::support::{TestContext, package_specs, root_fixture_config};
-
-fn installed_names(ready: &allez::ephemeral::ReadyEnvironment) -> BTreeSet<&str> {
-    ready
-        .installed_packages
-        .iter()
-        .map(|package| package.name.as_str())
-        .collect()
-}
+use crate::support::{TestContext, installed_names, package_specs, root_fixture_config};
 
 #[tokio::test(flavor = "current_thread")]
 #[serial_test::serial]

@@ -156,6 +156,8 @@ async fn fail_and_roll_back(
     }
 }
 
+/// Shared by [`emit_success`]/[`emit_failure`]: both construct an
+/// identical `EphemeralLifecycleEvent`, differing only in `outcome`/`failure_category`.
 fn emit_outcome(
     id: EnvironmentId,
     operation: &'static str,

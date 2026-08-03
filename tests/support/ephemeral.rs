@@ -60,6 +60,15 @@ pub(crate) fn package_specs(packages: &[&str]) -> RequestedPackages {
     )
 }
 
+/// Destructures `package_specs`'s always-`Explicit` result into the plain
+/// `Vec<PackageSpec>` an override parameter needs.
+pub(crate) fn explicit_package_specs(packages: &[&str]) -> Vec<PackageSpec> {
+    let RequestedPackages::Explicit(specs) = package_specs(packages) else {
+        unreachable!("package_specs always returns Explicit")
+    };
+    specs
+}
+
 /// The name of every package a `create_ephemeral_environment` call installed.
 pub(crate) fn installed_names(ready: &ReadyEnvironment) -> BTreeSet<&str> {
     ready

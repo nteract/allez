@@ -1,6 +1,6 @@
 //! Resolves parsed `.condarc` channel preferences into concrete channel identifiers.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use crate::model::{ChannelPriority, Config};
 use crate::scheme::has_scheme;
@@ -96,7 +96,7 @@ impl std::error::Error for ExpandChannelsError {}
 struct ResolveContext<'a> {
     channel_alias: &'a str,
     custom_channels: HashMap<&'a str, &'a str>,
-    custom_multichannels: &'a BTreeMap<String, Vec<String>>,
+    custom_multichannels: HashMap<&'a str, &'a [String]>,
     default_channels: Vec<&'a str>,
 }
 
@@ -203,11 +203,13 @@ pub fn expand_channels(config: &Config) -> Result<ResolvedChannels, ExpandChanne
             .collect(),
         None => DEFAULT_CUSTOM_CHANNELS.iter().copied().collect(),
     };
-    let empty_custom_multichannels = BTreeMap::new();
-    let custom_multichannels = config
-        .custom_multichannels
-        .as_ref()
-        .unwrap_or(&empty_custom_multichannels);
+    let custom_multichannels = match &config.custom_multichannels {
+        Some(multichannels) => multichannels
+            .iter()
+            .map(|(name, members)| (name.as_str(), members.as_slice()))
+            .collect(),
+        None => HashMap::new(),
+    };
     let default_channels = match &config.default_channels {
         Some(channels) => channels.iter().map(String::as_str).collect(),
         None => DEFAULT_CHANNELS.to_vec(),
@@ -253,13 +255,18 @@ pub fn expand_channels(config: &Config) -> Result<ResolvedChannels, ExpandChanne
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
 
     fn empty_context(custom_multichannels: &BTreeMap<String, Vec<String>>) -> ResolveContext<'_> {
         ResolveContext {
             channel_alias: "https://conda.example.org",
             custom_channels: HashMap::new(),
-            custom_multichannels,
+            custom_multichannels: custom_multichannels
+                .iter()
+                .map(|(name, members)| (name.as_str(), members.as_slice()))
+                .collect(),
             default_channels: Vec::new(),
         }
     }

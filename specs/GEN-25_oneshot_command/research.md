@@ -221,31 +221,22 @@ cannot target `CTRL_C_EVENT` at a specific process group — only
 system-wide `CTRL_C_EVENT` would also strike `allez`'s own process (see
 Microsoft's own documentation:
 <https://learn.microsoft.com/en-us/windows/console/generateconsolectrlevent>).
-This plan therefore only attempts *graceful* forwarding for `Ctrl-Break`
-on Windows; a `Ctrl-C` on Windows always results in the child being
-`.kill()`ed (never gracefully signaled) — a real, but documented, platform
-gap, not an unresolved inconsistency between "attempt `CTRL_BREAK_EVENT`"
-and "kill directly": `Ctrl-Break` gets the graceful attempt described
-above; `Ctrl-C` never does, because the underlying Win32 API makes a
-group-scoped `CTRL_C_EVENT` unsafe to attempt at all. For `Ctrl-Break`
-itself, the graceful attempt is bounded, not indefinite: after
+This plan therefore only attempts graceful forwarding for `Ctrl-Break` on
+Windows; an intercepted `Ctrl-C` always results in the child being
+`.kill()`ed, since a group-scoped `CTRL_C_EVENT` is unsafe to attempt at
+all. The `Ctrl-Break` attempt itself is bounded: after
 `GenerateConsoleCtrlEvent` returns a truthy `BOOL`, this plan waits `100ms`
-(a short, fixed, named constant — not configurable; see plan.md's
-Complexity Tracking for the identical wording) and checks once whether the
-child is still running — if so (the event was generated but the child
-didn't react, or reacted slowly), it falls back to `child.kill()` rather
-than waiting indefinitely or assuming success from the `BOOL` return
-alone. This mirrors
-real-world precedent: `watchexec` and `mise` both currently document
-Windows graceful-forwarding as unsupported/force-kill-only, and `zellij`
-attempts console-control delivery with the same kill-fallback this plan
-adopts. This is the concrete instance of spec.md's Assumptions clause
-"[w]here a platform has no equivalent concept ... this feature still
-reports its own documented, distinct failure category ... without
-requiring the same numeric convention on every platform" — Windows does
-not lose *forwarding* entirely, but its forwarding is best-effort for one
-signal only, which this plan treats as within that Assumption's
-already-granted latitude.
+(a short, fixed, named constant — see plan.md's Complexity Tracking) and
+checks once whether the child is still running, falling back to
+`child.kill()` if so rather than waiting indefinitely or trusting the
+`BOOL` return alone. This mirrors real-world precedent: `watchexec` and
+`mise` both document Windows graceful-forwarding as unsupported/
+force-kill-only, and `zellij` attempts console-control delivery with the
+same kill-fallback this plan adopts. This is the concrete instance of
+spec.md's Assumptions clause on platforms with no equivalent concept
+still reporting a distinct failure category without the same numeric
+convention everywhere — Windows's forwarding is best-effort for one
+signal only, within that Assumption's already-granted latitude.
 
 ## Decision: Exit-code classification from `ExitStatus`
 
@@ -394,57 +385,46 @@ sets `ALLEZ_CONDARC_PATH` (plus `ALLEZ_EPHEMERAL_ROOT`) via that one
 invocation's own `Command::env(...)` call rather than a process-wide
 `std::env::set_var`.
 
-**Rationale (feature-gating, not just documentation)**: an earlier draft
-of this decision made `ALLEZ_CONDARC_PATH` an always-compiled env var,
-documented as "test-only" but not actually prevented from being read by a
-real release build. That is a real, not hypothetical, problem for this
-specific product: `allez`'s own stated purpose (spec.md's Operating
-Context; GEN-19) is to be the one thing standing between an AI agent and
-unrestricted channel/package access, and an always-checked env var that
-lets the agent redirect `allez`'s own channel resolution before any
-policy is even applied is a stronger version of the exact env-var-driven
-policy-bypass class the team's own internal research already identified
-as the way an agent defeats `.condarc`-based restrictions (a
-`CONDA_ALLOWLIST_CHANNELS`-style override). Feature-gating removes this
-structurally rather than arguing it's acceptable: a binary compiled
-without `--features test-config-override` has no code path that reads
-`ALLEZ_CONDARC_PATH` at all — the variable doesn't just go undocumented,
-it doesn't exist. This repository's CI (`.github/workflows/ci.yml`) has no
-release/distribution-build job of any kind today — every job either runs
-tests, lints, or checks docs — so there is no existing pipeline step this
-feature could accidentally leak into; if one is added in the future, it
-MUST NOT pass `--features test-config-override`, the same discipline a
-`cargo install`/`cargo build --release` invocation with no explicit
-`--features`/`--all-features` flag already provides by default (Cargo
-never enables a non-default feature implicitly). This also means
+**Rationale (feature-gating, not just documentation)**: an always-compiled
+`ALLEZ_CONDARC_PATH`, documented as "test-only" but not actually blocked
+from a real release build, would be a real security problem: `allez`'s
+own stated purpose (spec.md's Operating Context; GEN-19) is to stand
+between an AI agent and unrestricted channel/package access, and an
+always-checked env var letting the agent redirect channel resolution
+before any policy applies is a stronger version of the
+`CONDA_ALLOWLIST_CHANNELS`-style bypass the team's own internal research
+already identified. Feature-gating removes this structurally: a binary
+compiled without `--features test-config-override` has no code path that
+reads `ALLEZ_CONDARC_PATH` at all — it doesn't just go undocumented, it
+doesn't exist. This repository's CI has no release/distribution-build job
+today — every job runs tests, lints, or checks docs — so there is no
+existing pipeline step this could leak into; if one is added later, it
+MUST NOT pass `--features test-config-override`, the same discipline
+`cargo install`/`cargo build --release` already provides by default
+(Cargo never enables a non-default feature implicitly). This keeps
 plan.md's Constitution VII claim ("this ticket adds no new environment
-variable of its own") stays true for any such real distribution build;
-only a `cargo test`-time build (with the feature explicitly requested)
-gains the check. This ticket deliberately keeps its own name
-(`ALLEZ_CONDARC_PATH`), not conda's own `CONDARC` — conda's `CONDARC` is
-additive (merges with `$HOME/.condarc` rather than replacing it), and
-`condarc` (GEN-36) is described as a normative, conda-compatible parser;
-reusing that name for a same-named-but-differently-scoped, exclusive
-override would be a worse source of confusion than an unrelated name that
-never claims to be conda's own convention.
+variable of its own") true for any real distribution build; only a
+`cargo test`-time build with the feature explicitly requested gains the
+check. This ticket keeps its own name (`ALLEZ_CONDARC_PATH`) rather than
+conda's `CONDARC` — conda's `CONDARC` is additive (merges with
+`$HOME/.condarc`), and `condarc` (GEN-36) is a normative, conda-compatible
+parser; reusing that name for a differently-scoped, exclusive override
+would confuse more than an unrelated name.
 
 **Rationale (the seam itself)**: `dirs::home_dir()` on Windows resolves
 via a real OS API call (`SHGetKnownFolderPath(FOLDERID_Profile)`), not by
-reading `USERPROFILE` or any other environment variable — setting
+reading `USERPROFILE` or any other environment variable, so setting
 `USERPROFILE` on one `assert_cmd::Command` invocation would silently have
-no effect on what `dirs::home_dir()` returns inside that child process. A
-real override seam is required for deterministic, portable test isolation
-on every target platform the same way; `ALLEZ_CONDARC_PATH` is that seam.
-Beyond that, `assert_cmd::Command::env()` scopes an environment variable
-to exactly the one child process it spawns; since every test here spawns
-its own fresh `allez` subprocess (unlike GEN-24's own tests, which call
-`ephemeral::` functions *in-process* and therefore do share one `cargo
-test` binary's process-wide environment across concurrently-running test
-threads), no cross-test interference is possible and no `#[serial]`/mutex
-discipline is needed — a simpler, more isolated test story than GEN-24's
-own, made possible specifically because this ticket's own tests operate
-one level higher (through the CLI binary), not because GEN-24's approach
-was wrong for its own, lower level.
+no effect there. `ALLEZ_CONDARC_PATH` is the override seam this needs for
+deterministic, portable test isolation on every target platform.
+`assert_cmd::Command::env()` also scopes the variable to exactly the one
+child process it spawns; since every test here spawns its own fresh
+`allez` subprocess (unlike GEN-24's own tests, which call `ephemeral::`
+functions in-process and share one `cargo test` binary's process-wide
+environment), no cross-test interference is possible and no
+`#[serial]`/mutex discipline is needed — simpler and more isolated than
+GEN-24's own story, because these tests operate one level higher, through
+the CLI binary.
 
 **Default-package testing, given `DEFAULT_PACKAGES = ["python"]`**: the
 checked-in local fixture channel does not, and will not, contain a
@@ -484,6 +464,14 @@ harness that isn't itself attached to the same console session as the
 subject process — this plan defers exact Windows signal-forwarding test
 mechanics to task-breakdown/implementation time rather than guessing at a
 specific harness technique here, while still requiring *some* automated
-coverage of the Windows fallback-to-`kill()` path (which needs no console
-plumbing to test: simply confirm a still-running child is gone after
-`allez` itself is killed).
+coverage of the Windows fallback-to-`kill()` path. That coverage cannot
+come from hard-terminating a spawned `allez` subprocess and checking
+whether its own pass-through child is also gone: `child.kill()` only runs
+inside an *intercepted* Ctrl-C/Ctrl-Break handler, so a hard-terminated
+`allez` process never runs that handler at all and would leave the child
+orphaned and still running, not gone. The fallback decision itself is
+therefore covered by a unit test of that logic directly — constructing
+both conditions it falls back on (a falsy `GenerateConsoleCtrlEvent`
+return, and a truthy return followed by the bounded liveness recheck
+still finding the child running) against a real child process the test
+spawns and kills independently — which needs no console plumbing at all.

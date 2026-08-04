@@ -53,8 +53,11 @@ separate, later artifact (`/speckit.tasks`).
   process/OS; they run on the Linux/macOS CI legs only. Windows
   `Ctrl-Break` forwarding needs console-session plumbing this guide does
   not prescribe in detail (see `research.md`'s test-strategy note) — at
-  minimum, the Windows-only kill-fallback path (no console session
-  needed) must be covered.
+  minimum, the Windows-only kill-fallback decision logic must be covered
+  by a unit test that spawns and kills its own child process directly
+  (no console session needed), since that decision is only reachable from
+  inside an intercepted Ctrl-C/Ctrl-Break handler and cannot be exercised
+  by hard-terminating a spawned `allez` subprocess itself.
 
 ## Set up a fixture-pointing test condarc
 
@@ -68,13 +71,16 @@ which is not in `Cargo.toml`) needed. `tests/support/mod.rs` only exports
 `#[path = ...]` include `tests/ephemeral_env.rs` already uses:
 
 ```rust
+// `mod support;` belongs at file scope (as in `tests/oneshot_exec.rs`
+// itself); the `let` statements below belong inside a test function —
+// shown together here only for brevity.
 #[path = "support/ephemeral.rs"]
 mod support;
 
 let condarc = tempfile::NamedTempFile::new().unwrap();
 std::fs::write(
     condarc.path(),
-    format!("channels: [{}]\n", support::fixture_channel("")),
+    format!("channels: [\"{}\"]\n", support::fixture_channel("")),
 )
 .unwrap();
 let root = tempfile::tempdir().unwrap();
@@ -105,7 +111,7 @@ points directly at one file, so its name is irrelevant to how it's read.
 | 1.1 Packages before `--` are installed before the command starts | Run `oneshot fixture-probe -- fixture-probe` on Unix / `oneshot fixture-probe -- fixture-probe.cmd` on Windows (bare name; `fixture-probe`'s own per-platform build is GEN-24's fixture purpose-built for exactly this activation/PATH-usability assertion — `fixture-default-alpha`/`beta` are dependency-free `noarch` packages with no payload files, so they cannot be used here); assert the program actually runs and exits `0`. |
 | 1.2 Zero packages routes through the same code path as an explicit package, without a usage error | Run `oneshot -- echo hi` against the fixture channel; assert exit `1`, category `unresolvable_package` (not `missing_pass_through_command`/exit `2`) — proving `RequestedPackages::UseDefaultOrOverride` was accepted and reached package resolution, not that `python` itself resolves (see Prerequisites' `DEFAULT_PACKAGES` note). |
 | 1.3 Two invocations never share an environment | Run `oneshot fixture-default-alpha -- <program printing its own environment's prefix path>` twice; assert the two printed prefix paths differ. |
-| 1.4 Multi-arg pass-through, spaces/shell-special chars preserved | Run `oneshot fixture-default-alpha -- echo "hello world" '$HOME'`; assert the child's own stdout contains those exact, unshell-expanded tokens (proving no intermediate shell interprets them). |
+| 1.4 Multi-arg pass-through, spaces/shell-special chars preserved | Run `oneshot fixture-default-alpha -- echo "hello world" '$HOME'` on Unix / a platform-equivalent literal-argument-preserving program on Windows (`echo` is a `cmd.exe` builtin there, not an executable); assert the child's own stdout contains those exact, unshell-expanded tokens (proving no intermediate shell interprets them). |
 | 1.5 Environment's own executable found first via `PATH` | Run `oneshot fixture-probe -- fixture-probe` on Unix / `oneshot fixture-probe -- fixture-probe.cmd` on Windows (bare name, no absolute path given); assert it runs and exits `0`. This proves the environment's own binary is *findable* via `PATH` — proving it's found in *preference* to a same-named host binary (FR-003's literal "not a same-named one that may exist elsewhere on the host") additionally requires a decoy `fixture-probe` planted on the host's own `PATH` that exits with a distinct code, so the test can tell which copy ran; that decoy setup is implementation-time task-breakdown scope, not fully specified here. |
 
 ### User Story 2 — real output and real exit code
@@ -120,10 +126,10 @@ failure (that's 1.2's own job, above).
 | Scenario | Validation |
 |---|---|
 | 2.1 Streamed (not buffered), stdout/stderr kept separate | Run `oneshot fixture-default-alpha -- <a small script that writes to stdout, sleeps, writes to stderr, sleeps>` with a timeout shorter than the total sleep; assert the *first* write is already observable before the process exits (proves streaming), and that it landed on the correct stream. |
-| 2.2 Exit code propagated exactly | Run `oneshot fixture-default-alpha -- <program using `sh -c 'exit 37'` or platform-equivalent>`; assert `allez`'s own exit code is exactly `37`. |
+| 2.2 Exit code propagated exactly | Run `oneshot fixture-default-alpha -- <program using sh -c 'exit 37' or platform-equivalent>`; assert `allez`'s own exit code is exactly `37`. |
 | 2.3 stdin forwarded unchanged | Pipe known bytes into `allez oneshot fixture-default-alpha -- cat` (or platform equivalent); assert the child's stdout echoes them. |
 | 2.4 Interceptable signal forwarded, `allez` doesn't exit early | `#[cfg(unix)]` only: run `oneshot fixture-default-alpha -- <a script that traps SIGTERM and exits 99>`, send `allez`'s own process `SIGTERM`, assert `allez` itself doesn't exit until the child does, and that the final exit code is `99` (not `128+15`, since the child exited normally after its own trap ran). Forwarding targets the direct child PID only (no process-group assertion needed — see `research.md`'s signal-forwarding decision). |
-| 2.5 Signal-terminated child reports `128+N` | `#[cfg(unix)]` only: run `oneshot fixture-default-alpha -- <a script that immediately self-signals or is killed externally, e.g. `sh -c 'kill -TERM $$'`>`; assert `allez`'s own exit code is `143` (`128+15`), that stdout/stderr carry no `allez`-authored message or category (FR-013), and that category `pass_through_terminated_by_signal` appears only in the FR-012 tracing event (`RUST_LOG=debug`). |
+| 2.5 Signal-terminated child reports `128+N` | `#[cfg(unix)]` only: run `oneshot fixture-default-alpha -- <a script that immediately self-signals or is killed externally, e.g. sh -c 'kill -TERM $$'>`; assert `allez`'s own exit code is `143` (`128+15`), that stdout/stderr carry no `allez`-authored message or category (FR-013), and that category `pass_through_terminated_by_signal` appears only in the FR-012 tracing event (`RUST_LOG=debug`). |
 
 ### User Story 3 — distinct environment-vs-command failure
 

@@ -83,8 +83,8 @@ impl PassThroughFailure {
     /// method rather than a `const` table. `ActivationFailed` and
     /// `SignalSetupFailed` are deliberately their own match arms
     /// returning `1`, not folded into `NotExecutable`'s `126` arm — the
-    /// categories map to different exit codes, and merging their arms is
-    /// the exact copy-paste risk an earlier draft of this sketch had.
+    /// categories map to different exit codes, and merging their arms
+    /// would risk exactly this kind of copy-paste error.
     pub fn exit_code(&self) -> i32 {
         match self {
             Self::NotFound => 127,
@@ -102,10 +102,9 @@ Makes "did the pass-through program even start" and "how did it end"
 mutually exclusive at the type level (Constitution VI), and is the value
 `oneshot::run`'s caller (`main.rs`'s `dispatch`) uses to pick
 `std::process::exit`'s real code — `oneshot::run` itself never calls
-`std::process::exit`, keeping it a plain, unit-testable function. Named
-`OneshotOutcome`, not the earlier `AllezOutcome` — this type is scoped to
-one subcommand's own result, not an application-wide concept, and the
-name should say so.
+`std::process::exit`, keeping it a plain, unit-testable function. Scoped
+to one subcommand's own result, not an application-wide concept, hence
+`OneshotOutcome` rather than a generic `AllezOutcome`.
 
 ```rust
 /// The result of one `allez oneshot` invocation, once past usage-error
@@ -117,11 +116,14 @@ name should say so.
 /// visibility to the `allez` *library* crate only, which `main.rs`'s
 /// `dispatch` (this type's one real consumer) is not part of, so
 /// `pub(crate)` would make this type invisible to the very code that
-/// needs to match on it. `pub mod pass_through;` in `src/cli/mod.rs`
-/// (a one-line addition — see Project Structure) is what makes this
-/// type, `PassThroughFailure`, and `OneshotOutcomeEvent` reachable from
-/// `main.rs` at all, exactly the way the five existing sibling
-/// subcommand modules already are.
+/// needs to match on it. `OneshotOutcome` itself needs no new `pub mod`
+/// line of its own: `oneshot.rs` is already declared via the pre-existing
+/// `pub mod oneshot;` (`src/cli/mod.rs`), one of the six existing sibling
+/// subcommand modules, so this type is already reachable from `main.rs`
+/// once it is `pub`. `pub mod pass_through;` (a one-line addition — see
+/// Project Structure) is what makes `PassThroughFailure` and
+/// `OneshotOutcomeEvent` — both new to `pass_through.rs` — reachable from
+/// `main.rs` instead.
 pub enum OneshotOutcome {
     /// The environment could not be created (FR-010). `render_ephemeral_
     /// creation_failure` (new `output.rs` function) has already been
@@ -212,10 +214,10 @@ are built from the same `PassThroughFailure` type. `TerminatedBySignal`'s
 `category()` and a rendered message are still produced and used — but
 only to populate the `OneshotOutcomeEvent` tracing record
 (`failure_category`/`message` below), never anything printed to the
-caller. An earlier draft of this plan folded `TerminatedBySignal` into
-`PassThroughFailed` uniformly with the other four variants, which would
-have violated FR-013 for every signal-terminated pass-through command;
-this rule is the correction.
+caller. Folding `TerminatedBySignal` into `PassThroughFailed` uniformly
+with the other four variants would violate FR-013 for every
+signal-terminated pass-through command; this construction rule is what
+prevents that.
 
 ## `OneshotOutcomeEvent` (new — `src/cli/pass_through.rs`)
 

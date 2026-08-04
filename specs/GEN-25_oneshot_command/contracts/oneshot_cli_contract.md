@@ -69,14 +69,19 @@ existing `Display` impl (GEN-24) verbatim — it already produces `"{error}
 logic is needed; only the JSON path needs the two new optional fields.
 
 **Once the pass-through program has successfully started** (FR-013):
-`allez` writes nothing of its own to stdout or stderr, ever again, for
-this invocation. The pass-through program's own stdout/stderr — streamed
-live, each stream kept separate (FR-004) — *is* the entire visible output;
-`allez`'s own final exit code is the entire machine-actionable signal.
-This is the one documented exception to Constitution III's dual-format
-convention (spec.md FR-013 itself says so) — there is no JSON/human
-rendering to reconcile because there is no separate `allez`-authored
-payload at all for this outcome.
+`allez` writes no further caller-facing result payload of its own to
+stdout or stderr, ever again, for this invocation. The pass-through
+program's own stdout/stderr — streamed live, each stream kept separate
+(FR-004) — *is* the entire visible output; `allez`'s own final exit code
+is the entire machine-actionable signal. This is the one documented
+exception to Constitution III's dual-format convention (spec.md FR-013
+itself says so) — there is no JSON/human rendering to reconcile because
+there is no separate `allez`-authored result payload at all for this
+outcome. The `RUST_LOG`-gated `tracing` channel (Observability contract,
+below) is not this result payload: it is silent unless the caller
+explicitly opts in via `RUST_LOG`, and even then carries only the fixed,
+schema-versioned `OneshotOutcomeEvent` fields — never a second copy of,
+or a substitute for, the pass-through program's own output or exit code.
 
 ## Observability contract (FR-012, additive extension)
 

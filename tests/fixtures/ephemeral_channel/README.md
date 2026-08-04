@@ -14,9 +14,15 @@ archive bytes.
 
 ## Default-package candidates
 
-T011 must choose its `DEFAULT_PACKAGES` values from the dependency-free,
-noarch root-channel packages `fixture-default-alpha` `1.0.0` and
-`fixture-default-beta` `1.0.0`.
+`fixture-default-alpha` `1.0.0` and `fixture-default-beta` `1.0.0` are
+dependency-free, noarch root-channel packages meant for tests that need an
+explicit, fixture-resolvable package request. They are no longer
+`DEFAULT_PACKAGES`'s own value: GEN-25 changed `DEFAULT_PACKAGES` to
+`["python"]`, a documented stopgap pending GEN-30's real default/override
+mechanism (see `src/ephemeral/defaults.rs`'s own doc comment) — `python`
+does not resolve against this fixture channel, so any test exercising the
+zero-packages-falls-back-to-`DEFAULT_PACKAGES` code path must assert the
+resulting `unresolvable_package` failure rather than a successful install.
 
 `fixture-probe` is intentionally not a default-package candidate.
 

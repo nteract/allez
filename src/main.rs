@@ -4,6 +4,8 @@ use clap::Parser;
 use clap::error::ErrorKind;
 
 use allez::{cli, error, observability, output};
+use cli::oneshot::OneshotOutcome;
+use cli::pass_through::PASS_THROUGH_EVENT_SCHEMA_VERSION;
 use cli::{Cli, Commands};
 use error::AllezError;
 
@@ -21,11 +23,17 @@ use error::AllezError;
 /// [`human_requested_in_argv`] rather than a post-parse `cli.human` — this
 /// is what makes `RUST_LOG` take effect even on the parse-error path (the
 /// subscriber would otherwise only be initialized in the `Ok(cli)` branch).
-fn main() {
+///
+/// `#[tokio::main]`: `cli::oneshot::run`'s own `create_ephemeral_environment`
+/// call (GEN-24) is an `async fn` requiring an active Tokio runtime
+/// `Handle`; `flavor = "multi_thread"` matches the `rt-multi-thread`
+/// feature already enabled in `Cargo.toml`.
+#[tokio::main(flavor = "multi_thread")]
+async fn main() {
     let human = human_requested_in_argv();
     observability::init(human);
     match Cli::try_parse() {
-        Ok(cli) => dispatch(cli),
+        Ok(cli) => dispatch(cli).await,
         Err(e) => {
             if matches!(
                 e.kind(),
@@ -114,7 +122,12 @@ fn exit_on_invalid_pass_through(
     human: bool,
 ) {
     if let Err(err) = result {
-        tracing::warn!(operation, category = err.category(), "usage error");
+        tracing::warn!(
+            operation,
+            category = err.category(),
+            schema_version = PASS_THROUGH_EVENT_SCHEMA_VERSION,
+            "usage error"
+        );
         exit_with_error(err.category(), &err.to_string(), human);
     }
 }
@@ -149,7 +162,7 @@ fn emit_stub_success(
 /// Each arm's `tracing` event never includes the pass-through command's
 /// own redacted `program`/`args` content, keeping the same secrecy
 /// guarantee the stdout payload already has.
-fn dispatch(cli: Cli) {
+async fn dispatch(cli: Cli) {
     let operation = cli.command.name();
     match cli.command {
         Commands::Oneshot(args) => {
@@ -158,9 +171,13 @@ fn dispatch(cli: Cli) {
                 cli::validate_pass_through(&args.pass_through),
                 cli.human,
             );
-            emit_stub_success(operation, Some(args.packages.len()), || {
-                cli::oneshot::run(&args, cli.human, cli.verbose)
-            });
+            let outcome = cli::oneshot::run(&args, cli.human, cli.verbose).await;
+            match &outcome {
+                OneshotOutcome::EnvironmentCreationFailed { message }
+                | OneshotOutcome::PassThroughFailed { message, .. } => eprintln!("{message}"),
+                OneshotOutcome::PassThroughExited { .. } => {}
+            }
+            std::process::exit(outcome.exit_code());
         }
         Commands::Create(args) => {
             emit_stub_success(operation, Some(args.packages.len()), || {

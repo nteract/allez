@@ -1,6 +1,8 @@
 use std::collections::BTreeSet;
 
-use allez::ephemeral::{DEFAULT_PACKAGES, RequestedPackages, create_ephemeral_environment};
+use allez::ephemeral::{
+    DEFAULT_PACKAGES, EphemeralEnvError, RequestedPackages, create_ephemeral_environment,
+};
 use condarc::ChannelPriority;
 
 use crate::support::{
@@ -55,22 +57,26 @@ async fn explicit_packages_alongside_an_override_ignore_the_override_entirely() 
 
 #[tokio::test(flavor = "current_thread")]
 #[serial_test::serial]
-async fn an_override_resolving_to_empty_falls_back_to_default_packages() {
+async fn an_override_resolving_to_empty_falls_back_to_default_packages_the_fixture_channel_cannot_satisfy()
+ {
     // Given
     let _context = TestContext::new("empty-override-falls-back");
 
     // When
-    let ready = create_ephemeral_environment(
+    let failure = create_ephemeral_environment(
         RequestedPackages::UseDefaultOrOverride,
         root_fixture_config(ChannelPriority::Strict),
         Some(Vec::new()),
     )
     .await
-    .unwrap();
+    .unwrap_err();
 
     // Then
+    assert_eq!(DEFAULT_PACKAGES, ["python"]);
     assert_eq!(
-        installed_names(&ready),
-        DEFAULT_PACKAGES.iter().copied().collect()
+        failure.error,
+        EphemeralEnvError::UnresolvablePackage {
+            package: "python".to_string()
+        }
     );
 }

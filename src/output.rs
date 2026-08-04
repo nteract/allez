@@ -3,6 +3,7 @@
 use serde_json::{Value, json};
 
 use crate::cli::PassThroughArgs;
+use crate::error::CategorizedError;
 
 const SCHEMA_VERSION: &str = "0.1.0-unstable";
 
@@ -55,6 +56,33 @@ pub fn render_error(category: &str, message: &str, human: bool) -> String {
             "message": message,
         })
         .to_string()
+    }
+}
+
+/// Renders an [`crate::ephemeral::CreationFailure`], additive to
+/// [`render_error`]'s `{schema_version, category, message}` shape with two
+/// optional fields (`cleanup_category`, `cleanup_message`) present only
+/// when `failure.cleanup_error` is `Some` (FR-010's dual-failure case).
+/// `--human` mode reuses `CreationFailure`'s own `Display` impl verbatim
+/// (already produces `"{error} (cleanup also failed: {cleanup})"`), so no
+/// separate human-mode dual-field logic is needed.
+pub fn render_ephemeral_creation_failure(
+    failure: &crate::ephemeral::CreationFailure,
+    human: bool,
+) -> String {
+    if human {
+        format!("error: {failure}")
+    } else {
+        let mut body = json!({
+            "schema_version": SCHEMA_VERSION,
+            "category": failure.error.category(),
+            "message": failure.error.to_string(),
+        });
+        if let Some(cleanup_error) = &failure.cleanup_error {
+            body["cleanup_category"] = json!(cleanup_error.category());
+            body["cleanup_message"] = json!(cleanup_error.to_string());
+        }
+        body.to_string()
     }
 }
 
@@ -126,5 +154,57 @@ mod tests {
             render_error("unknown_flag", "custom text", true),
             "error: custom text"
         );
+    }
+
+    #[test]
+    fn render_ephemeral_creation_failure_single_failure_has_no_cleanup_fields() {
+        use crate::ephemeral::{CreationFailure, EnvironmentId, EphemeralEnvError};
+
+        let failure = CreationFailure {
+            id: EnvironmentId::new(),
+            error: EphemeralEnvError::UnresolvablePackage {
+                package: "numpy".to_string(),
+            },
+            cleanup_error: None,
+        };
+        let rendered = render_ephemeral_creation_failure(&failure, false);
+        let parsed: Value = serde_json::from_str(&rendered).expect("valid JSON");
+        assert_eq!(parsed["category"], "unresolvable_package");
+        assert!(parsed.get("cleanup_category").is_none());
+        assert!(parsed.get("cleanup_message").is_none());
+    }
+
+    #[test]
+    fn render_ephemeral_creation_failure_dual_failure_carries_both_categories_distinctly() {
+        use crate::ephemeral::{CreationFailure, EnvironmentId, EphemeralEnvError};
+
+        let failure = CreationFailure {
+            id: EnvironmentId::new(),
+            error: EphemeralEnvError::IntegrityVerificationFailed {
+                package: "fixture-corrupt-checksum".to_string(),
+            },
+            cleanup_error: Some(EphemeralEnvError::TeardownFailed),
+        };
+        let rendered = render_ephemeral_creation_failure(&failure, false);
+        let parsed: Value = serde_json::from_str(&rendered).expect("valid JSON");
+        assert_eq!(parsed["category"], "integrity_verification_failed");
+        assert_eq!(parsed["cleanup_category"], "teardown_failed");
+        assert_ne!(parsed["category"], parsed["cleanup_category"]);
+        assert!(parsed["message"].is_string());
+        assert!(parsed["cleanup_message"].is_string());
+    }
+
+    #[test]
+    fn render_ephemeral_creation_failure_human_mode_reuses_display_for_dual_failure() {
+        use crate::ephemeral::{CreationFailure, EnvironmentId, EphemeralEnvError};
+
+        let failure = CreationFailure {
+            id: EnvironmentId::new(),
+            error: EphemeralEnvError::UnwritableLocation,
+            cleanup_error: Some(EphemeralEnvError::TeardownFailed),
+        };
+        let rendered = render_ephemeral_creation_failure(&failure, true);
+        assert!(rendered.starts_with("error: "));
+        assert!(rendered.contains("cleanup also failed"));
     }
 }

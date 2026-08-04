@@ -22,7 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test --all --locked
+      - run: cargo test --all --locked --features test-config-override
 
   doc:
     name: cargo doc (allez, condarc)
@@ -65,7 +65,7 @@ jobs:
       # Revisit this number at T056/T058 once the full `ephemeral/` module
       # (including its Windows-only/`#[cfg(windows)]` paths this Linux job
       # can't itself exercise) has landed and real coverage is measured.
-      - run: cargo llvm-cov --all --locked --fail-under-lines 85
+      - run: cargo llvm-cov --all --locked --fail-under-lines 85 --features test-config-override
 
   conformance:
     name: condarc conformance tests

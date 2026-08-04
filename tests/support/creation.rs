@@ -1,6 +1,8 @@
 use std::process::Command;
 
-use allez::ephemeral::{DEFAULT_PACKAGES, RequestedPackages, create_ephemeral_environment};
+use allez::ephemeral::{
+    DEFAULT_PACKAGES, EphemeralEnvError, RequestedPackages, create_ephemeral_environment,
+};
 use condarc::{ChannelPriority, ResolvedChannels};
 
 use crate::support::{
@@ -38,22 +40,27 @@ async fn resolvable_packages_are_installed_and_the_probe_is_usable() {
 
 #[tokio::test(flavor = "current_thread")]
 #[serial_test::serial]
-async fn empty_package_list_installs_built_in_defaults() {
+async fn empty_package_list_resolves_default_packages_the_fixture_channel_cannot_satisfy() {
     // Given
     let _context = TestContext::new("built-in-defaults");
 
     // When
-    let ready = create_ephemeral_environment(
+    let failure = create_ephemeral_environment(
         RequestedPackages::Explicit(Vec::new()),
         root_fixture_config(ChannelPriority::Strict),
         None,
     )
     .await
-    .unwrap();
+    .unwrap_err();
 
     // Then
-    let installed = installed_names(&ready);
-    assert_eq!(installed, DEFAULT_PACKAGES.iter().copied().collect());
+    assert_eq!(DEFAULT_PACKAGES, ["python"]);
+    assert_eq!(
+        failure.error,
+        EphemeralEnvError::UnresolvablePackage {
+            package: "python".to_string()
+        }
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]

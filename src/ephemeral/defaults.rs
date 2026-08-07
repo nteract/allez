@@ -7,10 +7,15 @@ use rattler_conda_types::{MatchSpec, ParseStrictness};
 
 use super::channels::redact_channel_url;
 
-/// Fixed, non-empty default package set, matching
-/// `tests/fixtures/ephemeral_channel/`'s dependency-free noarch packages
-/// (see that fixture's `README.md`).
-pub const DEFAULT_PACKAGES: &[&str] = &["fixture-default-alpha", "fixture-default-beta"];
+/// Fixed, non-empty default package set. A documented stopgap pending
+/// GEN-30's own default/override-authoring mechanism: no mechanism in this
+/// codebase surfaces a caller-configured override today, so this constant
+/// is `allez oneshot`'s only real default. `python` is a real,
+/// near-universally-available package on real channels; it does not
+/// resolve against the checked-in local fixture channel
+/// (`tests/fixtures/ephemeral_channel/`) used by this crate's own test
+/// suite (see `research.md`'s "Default package list" decision).
+pub const DEFAULT_PACKAGES: &[&str] = &["python"];
 
 /// An opaque, syntactically-validated conda match-spec string.
 #[derive(Clone, PartialEq, Eq)]

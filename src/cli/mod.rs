@@ -9,6 +9,9 @@ pub mod create;
 pub mod list;
 /// `allez oneshot` subcommand.
 pub mod oneshot;
+/// `allez oneshot`'s process-lifecycle scope: spawning, signal forwarding,
+/// and exit-code classification for its pass-through program.
+pub mod pass_through;
 /// `allez remove` subcommand.
 pub mod remove;
 /// `allez run` subcommand.
@@ -33,7 +36,7 @@ pub fn parse_nonempty_path(s: &str) -> Result<String, String> {
 pub struct PassThroughArgs {
     /// Everything after `--`: the pass-through command's name followed by
     /// its own arguments.
-    #[arg(last = true)]
+    #[arg(last = true, value_name = "ARGS")]
     pub(crate) raw: Vec<String>,
 }
 

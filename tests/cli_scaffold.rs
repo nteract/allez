@@ -84,40 +84,6 @@ fn t048_help_and_version_output_is_never_json(#[case] args: &[&str]) {
 }
 
 #[test]
-fn t016_oneshot_with_packages_and_command_identifies_parsed_values() {
-    let (code, stdout, _stderr) = run_allez(&[
-        "oneshot",
-        "pkg1",
-        "pkg2",
-        "--verbose",
-        "--",
-        "echo",
-        "hello",
-    ]);
-    assert_eq!(code, 0);
-    let v: Value = serde_json::from_str(&stdout).expect("valid JSON");
-    assert_eq!(v["parsed"]["packages"], serde_json::json!(["pkg1", "pkg2"]));
-    assert_eq!(v["parsed"]["pass_through"]["program"], "echo");
-    assert_eq!(
-        v["parsed"]["pass_through"]["args"],
-        serde_json::json!(["hello"])
-    );
-}
-
-#[test]
-fn t016a_oneshot_zero_packages_is_valid_not_error() {
-    let (code, stdout, _stderr) = run_allez(&["oneshot", "--verbose", "--", "echo", "hi"]);
-    assert_eq!(code, 0);
-    let v: Value = serde_json::from_str(&stdout).expect("valid JSON");
-    assert_eq!(v["parsed"]["packages"], serde_json::json!([]));
-    assert_eq!(v["parsed"]["pass_through"]["program"], "echo");
-    assert_eq!(
-        v["parsed"]["pass_through"]["args"],
-        serde_json::json!(["hi"])
-    );
-}
-
-#[test]
 fn t017_create_with_path_and_packages() {
     let (code, stdout, _stderr) = run_allez(&["create", "./my-env", "pkg1", "pkg2"]);
     assert_eq!(code, 0);
@@ -198,23 +164,6 @@ fn t023_list_default_json_matches_fixed_minimal_shape() {
 }
 
 #[test]
-fn t023a_oneshot_default_json_matches_fixed_shape() {
-    let (code, stdout, _stderr) = run_allez(&["oneshot", "pkg1", "--", "echo", "hi"]);
-    assert_eq!(code, 0);
-    let v: Value = serde_json::from_str(&stdout).expect("valid JSON");
-    assert!(v["schema_version"].is_string());
-    assert_eq!(v["subcommand"], "oneshot");
-    assert_eq!(v["status"], "stub");
-    assert_eq!(
-        v["parsed"],
-        serde_json::json!({
-            "packages": ["pkg1"],
-            "pass_through": {"program": "<redacted>", "arg_count": 1}
-        })
-    );
-}
-
-#[test]
 fn t023b_create_default_json_matches_fixed_shape() {
     let (code, stdout, _stderr) = run_allez(&["create", "./my-env"]);
     assert_eq!(code, 0);
@@ -271,7 +220,6 @@ fn t023e_remove_default_json_matches_fixed_shape() {
 }
 
 #[rstest]
-#[case(&["oneshot", "pkg1"], &["echo", "hello"])]
 #[case(&["run", "./my-env"], &["echo", "hello"])]
 #[case(&["sandbox"], &["echo", "hello"])]
 fn t023f_pass_through_redacted_by_default_json_and_human(
@@ -303,7 +251,6 @@ fn t023f_pass_through_redacted_by_default_json_and_human(
 }
 
 #[rstest]
-#[case(&["oneshot", "pkg1"], &["python", "-c", "print(1)"])]
 #[case(&["run", "./my-env"], &["python", "-c", "print(1)"])]
 #[case(&["sandbox"], &["python", "-c", "print(1)"])]
 fn t023g_verbose_reveals_unredacted_pass_through_json_and_human(
@@ -341,13 +288,19 @@ fn t023h_human_flag_before_subcommand_matches_after_for_list() {
 
 #[test]
 fn t023i_human_flag_before_subcommand_matches_after_for_oneshot_with_args() {
-    let (code_before, stdout_before, _) =
-        run_allez(&["--human", "oneshot", "pkg1", "--", "echo", "hi"]);
-    let (code_after, stdout_after, _) =
-        run_allez(&["oneshot", "pkg1", "--human", "--", "echo", "hi"]);
-    assert_eq!(code_before, 0);
-    assert_eq!(code_after, 0);
+    // Uses the empty-separator usage-error path (never reaches
+    // `create_ephemeral_environment`, since `run_allez` has no
+    // `ALLEZ_CONDARC_PATH`/`ALLEZ_EPHEMERAL_ROOT` isolation) rather than a
+    // real pass-through invocation: FR-013 forbids any envelope once the
+    // pass-through program starts, so there is no unredacted payload left
+    // to compare positions of `--human` against.
+    let (code_before, stdout_before, stderr_before) =
+        run_allez(&["--human", "oneshot", "pkg1", "--"]);
+    let (code_after, stdout_after, stderr_after) = run_allez(&["oneshot", "pkg1", "--human", "--"]);
+    assert_eq!(code_before, 2);
+    assert_eq!(code_after, 2);
     assert_eq!(stdout_before, stdout_after);
+    assert_eq!(stderr_before, stderr_after);
 }
 
 /// Runs `allez` with `args`, asserts exit code `2`, an empty stdout, and a
@@ -400,6 +353,11 @@ fn t033a_case_mismatched_subcommand_exits_2_unknown_subcommand() {
 #[test]
 fn t034_oneshot_empty_separator_exits_2_missing_pass_through_command() {
     assert_usage_error(&["oneshot", "pkg1", "--"], "missing_pass_through_command");
+}
+
+#[test]
+fn t034a_oneshot_without_separator_exits_2_missing_pass_through_command() {
+    assert_usage_error(&["oneshot", "pkg1"], "missing_pass_through_command");
 }
 
 #[test]
@@ -462,8 +420,18 @@ fn t038_all_usage_errors_share_exit_code_category_and_stderr_convention(
     );
 }
 
+#[test]
+fn t038a_oneshot_empty_separator_rejected_as_usage_error() {
+    // Only the empty-separator usage-error half of the shared
+    // `run`/`sandbox` parametrization below applies to `oneshot`: the
+    // real-invocation, `--verbose`-pass-through half would require a
+    // controlled channel/root this file's own `run_allez` (no
+    // `ALLEZ_CONDARC_PATH`/`ALLEZ_EPHEMERAL_ROOT` isolation) cannot
+    // provide safely.
+    assert_usage_error(&["oneshot", "pkg1", "--"], "missing_pass_through_command");
+}
+
 #[rstest]
-#[case(&["oneshot", "pkg1"])]
 #[case(&["run", "./my-env"])]
 #[case(&["sandbox"])]
 fn t038a_empty_separator_and_flag_like_token_preservation_uniform_across_pass_through_subcommands(
@@ -486,7 +454,6 @@ fn t038a_empty_separator_and_flag_like_token_preservation_uniform_across_pass_th
 }
 
 #[rstest]
-#[case(&["oneshot", "pkg1"], &["echo", "hi", "--human"])]
 #[case(&["run", "./my-env"], &["echo", "--verbose"])]
 #[case(&["sandbox"], &["printf", "--", "human"])]
 fn t038b_global_flag_spelled_tokens_after_separator_are_forwarded_verbatim_not_reinterpreted(

@@ -10,7 +10,7 @@ help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | sort | awk -F ':.*## ' '{printf "%-24s %s\n", $$1, $$2}'
 
 test: ## Run the full cargo test suite
-	cargo test --all
+	cargo test --all --features test-config-override
 
 # Scoped to `-p condarc --lib -p allez --lib` rather than `--workspace`:
 # `--workspace` would also try (and fail, for unrelated reasons) to build

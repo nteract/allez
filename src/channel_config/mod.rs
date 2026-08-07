@@ -63,8 +63,21 @@ pub enum ChannelConfigResolution {
     NoChannels,
 }
 
+/// Test-only override seam (feature-gated, see `Cargo.toml`'s
+/// `test-config-override`): a release build has no code path that reads
+/// `ALLEZ_CONDARC_PATH` at all.
+#[cfg(feature = "test-config-override")]
+fn condarc_path_override() -> Option<PathBuf> {
+    std::env::var_os("ALLEZ_CONDARC_PATH").map(PathBuf::from)
+}
+
+#[cfg(not(feature = "test-config-override"))]
+fn condarc_path_override() -> Option<PathBuf> {
+    None
+}
+
 fn default_condarc_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|home| home.join(".condarc"))
+    condarc_path_override().or_else(|| dirs::home_dir().map(|home| home.join(".condarc")))
 }
 
 #[allow(clippy::expect_used)]

@@ -33,6 +33,22 @@ pub use defaults::{DEFAULT_PACKAGES, InvalidPackageSpec, PackageSpec, RequestedP
 pub use error::{ActivationError, CreationFailure, EphemeralEnvError};
 pub use lifecycle::{EnvironmentId, InstalledPackage, ReadyEnvironment};
 
+/// Test-only seam (feature-gated, see `Cargo.toml`'s `test-config-override`):
+/// lets `tests/oneshot_exec.rs`'s harness pre-create an already-owner-only
+/// `ALLEZ_EPHEMERAL_ROOT` directory on Windows before handing it to a real
+/// `allez` invocation, mirroring the root-reuse scenarios it also exercises
+/// on Unix (there, a plain `std::fs::set_permissions` narrows a
+/// harness-created directory to `0700`). Windows has no such direct
+/// chmod-equivalent for a directory `std::fs::create_dir` already made, so
+/// this seam reuses [`permissions::create_directory_with_owner_only_acl`]
+/// — the same routine `verified_root` itself calls — instead of
+/// duplicating its Win32 SDDL/ACL logic in test code. A release build has
+/// no code path that calls this at all.
+#[cfg(all(windows, feature = "test-config-override"))]
+pub fn test_create_owner_only_directory(path: &std::path::Path) -> Result<(), EphemeralEnvError> {
+    permissions::create_directory_with_owner_only_acl(path)
+}
+
 use cleanup::remove_prefix_dir;
 use events::{EPHEMERAL_EVENT_SCHEMA_VERSION, EphemeralLifecycleEvent, emit_event};
 use paths::VerifiedRoot;

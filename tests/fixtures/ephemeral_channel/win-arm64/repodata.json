@@ -1,0 +1,22 @@
+{
+  "info": {
+    "subdir": "win-arm64"
+  },
+  "packages": {
+    "fixture-probe-1.0.0-0.tar.bz2": {
+      "arch": "aarch64",
+      "build": "0",
+      "build_number": 0,
+      "depends": [],
+      "license": "BSD-3-Clause",
+      "md5": "78fdac4f1634bc7e4bab3d155d5db410",
+      "name": "fixture-probe",
+      "platform": "win",
+      "sha256": "69c97c8fdf658336cde61ef881031b7dfed67d984c0861f0d09b10e83597c808",
+      "size": 509,
+      "subdir": "win-arm64",
+      "timestamp": 1704067200000,
+      "version": "1.0.0"
+    }
+  }
+}

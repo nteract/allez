@@ -52,6 +52,7 @@ non-noarch artifact for every supported target:
 | `linux-aarch64` | `bin/fixture-probe`, executable `#!/bin/sh` script |
 | `osx-arm64` | `bin/fixture-probe`, executable `#!/bin/sh` script |
 | `win-64` | `Scripts/fixture-probe.cmd`, `@exit /b 0` batch file |
+| `win-arm64` | `Scripts/fixture-probe.cmd`, `@exit /b 0` batch file |
 
 The Unix scripts have archive mode `0755`. This package exists only for the
 T017 activation/PATH usability assertion.

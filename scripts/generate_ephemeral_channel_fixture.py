@@ -110,6 +110,16 @@ PACKAGES = (
         payload_path="Scripts/fixture-probe.cmd",
         payload=WINDOWS_PROBE,
     ),
+    PackageSpec(
+        "",
+        "win-arm64",
+        "fixture-probe",
+        "1.0.0",
+        arch="aarch64",
+        platform="win",
+        payload_path="Scripts/fixture-probe.cmd",
+        payload=WINDOWS_PROBE,
+    ),
     PackageSpec("priority-a", "noarch", "fixture-priority", "1.0.0", noarch=True),
     PackageSpec("priority-b", "noarch", "fixture-priority", "2.0.0", noarch=True),
 )
@@ -198,7 +208,16 @@ def write_repodata(channel_dir: Path, subdir: str, records: dict[str, dict[str, 
 
 
 def clean_generated_files() -> None:
-    for directory in ("noarch", "linux-64", "linux-aarch64", "osx-arm64", "win-64", "priority-a", "priority-b"):
+    for directory in (
+        "noarch",
+        "linux-64",
+        "linux-aarch64",
+        "osx-arm64",
+        "win-64",
+        "win-arm64",
+        "priority-a",
+        "priority-b",
+    ):
         path = FIXTURE_ROOT / directory
         if path.exists():
             shutil.rmtree(path)

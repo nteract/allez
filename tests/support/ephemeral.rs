@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, Mutex, OnceLock},
 };
 
-use allez::ephemeral::{PackageSpec, ReadyEnvironment, RequestedPackages};
+use allez::ephemeral::{PackageRequest, PackageSpec, ReadyEnvironment};
 use condarc::{ChannelPriority, ResolvedChannels};
 use rattler_conda_types::Channel;
 use tracing::{Event, Subscriber, field::Visit};
@@ -51,22 +51,19 @@ impl TestContext {
     }
 }
 
-pub(crate) fn package_specs(packages: &[&str]) -> RequestedPackages {
-    RequestedPackages::Explicit(
-        packages
-            .iter()
-            .map(|package| PackageSpec::parse(package).unwrap())
-            .collect(),
-    )
+pub(crate) fn package_specs(packages: &[&str]) -> Vec<PackageSpec> {
+    packages
+        .iter()
+        .map(|package| PackageSpec::parse(package).unwrap())
+        .collect()
 }
 
-/// Destructures `package_specs`'s always-`Explicit` result into the plain
-/// `Vec<PackageSpec>` an override parameter needs.
-pub(crate) fn explicit_package_specs(packages: &[&str]) -> Vec<PackageSpec> {
-    let RequestedPackages::Explicit(specs) = package_specs(packages) else {
-        unreachable!("package_specs always returns Explicit")
-    };
-    specs
+/// A request exercising no configured default package set at all.
+pub(crate) fn explicit_only(packages: &[&str]) -> PackageRequest {
+    PackageRequest {
+        explicit: package_specs(packages),
+        defaults: Vec::new(),
+    }
 }
 
 /// The name of every package a `create_ephemeral_environment` call installed.

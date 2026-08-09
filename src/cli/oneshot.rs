@@ -4,9 +4,10 @@ use crate::cli::pass_through::{
     self, OneshotOutcomeEvent, PASS_THROUGH_EVENT_SCHEMA_VERSION, PassThroughExit,
     PassThroughFailure, emit_outcome_event,
 };
+use crate::default_packages_config;
 use crate::ephemeral::{
-    CreationFailure, EnvironmentId, EphemeralEnvError, RequestedPackages,
-    create_ephemeral_environment,
+    CreationFailure, EnvironmentId, EphemeralEnvError, PackageRequest,
+    create_ephemeral_environment, parse_explicit_packages,
 };
 use crate::error::CategorizedError;
 use crate::output;
@@ -105,20 +106,25 @@ fn post_start_outcome(failure: PassThroughFailure, invocation_id: EnvironmentId)
 
 /// This handler does not call `validate_pass_through()` itself — that
 /// already happened at the dispatch layer, before this handler is ever
-/// invoked. Orchestrates: parse packages → resolve channels → create the
-/// environment → run the pass-through program — translating every
-/// pre-start failure into a rendered `String` plus [`OneshotOutcome`] the
-/// dispatch layer uses to pick `std::process::exit`'s code. Never calls
-/// `std::process::exit` directly, keeping it unit-testable.
+/// invoked. Orchestrates: parse per-invocation packages → read `.condarc`
+/// once → resolve channels and the default package set from that one
+/// document → create the environment → run the pass-through program —
+/// translating every pre-start failure into a rendered `String` plus
+/// [`OneshotOutcome`] the dispatch layer uses to pick
+/// `std::process::exit`'s code. Never calls `std::process::exit`
+/// directly, keeping it unit-testable.
 pub async fn run(args: &PackagesAndCommandArgs, human: bool, _verbose: bool) -> OneshotOutcome {
-    let requested = match RequestedPackages::from_cli(args.packages.clone()) {
-        Ok(requested) => requested,
+    let explicit = match parse_explicit_packages(args.packages.clone()) {
+        Ok(explicit) => explicit,
         Err(invalid) => {
             return environment_creation_failed(
                 CreationFailure {
                     id: EnvironmentId::new(),
                     error: EphemeralEnvError::UnresolvablePackage {
-                        package: invalid.input,
+                        package: invalid.index.map_or_else(
+                            || "<invalid command-line package>".to_string(),
+                            |index| format!("<command-line package {}>", index + 1),
+                        ),
                     },
                     cleanup_error: None,
                 },
@@ -127,7 +133,9 @@ pub async fn run(args: &PackagesAndCommandArgs, human: bool, _verbose: bool) -> 
         }
     };
 
-    let channels = match channel_config::resolve_channel_config() {
+    let document = channel_config::resolve_document();
+
+    let channels = match channel_config::channels_from_document(&document) {
         ChannelConfigResolution::Ready { config, .. } => config,
         ChannelConfigResolution::NoChannels => {
             return environment_creation_failed(
@@ -141,7 +149,11 @@ pub async fn run(args: &PackagesAndCommandArgs, human: bool, _verbose: bool) -> 
         }
     };
 
-    let environment = match create_ephemeral_environment(requested, channels, None).await {
+    let defaults = default_packages_config::create_default_packages_from_document(&document);
+
+    let request = PackageRequest { explicit, defaults };
+
+    let environment = match create_ephemeral_environment(request, channels).await {
         Ok(environment) => environment,
         Err(failure) => return environment_creation_failed(failure, human),
     };

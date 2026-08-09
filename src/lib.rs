@@ -10,6 +10,9 @@ pub mod channel_config;
 /// GEN-24; wiring the ephemeral-environment core into a real subcommand
 /// is GEN-25's job.
 pub mod cli;
+/// Resolution of the ephemeral-environment default package set from an
+/// already-resolved `.condarc` document (GEN-30).
+mod default_packages_config;
 /// The ephemeral-environment core: create and populate an unnamed,
 /// caller-unpathed conda environment (GEN-24).
 pub mod ephemeral;

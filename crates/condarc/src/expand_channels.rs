@@ -1,6 +1,6 @@
 //! Resolves parsed `.condarc` channel preferences into concrete channel identifiers.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::model::{ChannelPriority, Config};
 use crate::scheme::has_scheme;
@@ -41,6 +41,24 @@ pub struct ResolvedChannels {
     /// boolean-spelling mapping — that already happened at `parse()` time
     /// (research.md R2).
     pub channel_priority: ChannelPriority,
+    /// Maps each *named* channel entry the caller configured (a
+    /// `custom_channels` name, a `custom_multichannels` name, `defaults`,
+    /// or a bare name joined to `channel_alias`) to the concrete channel
+    /// URLs it resolved to, restricted to those that survived FR-019's
+    /// filtering.
+    ///
+    /// Exists so a consumer resolving a `<name>::<package>` match-spec
+    /// qualifier can use the same identity `channels` was built from,
+    /// rather than inferring it from a URL's shape: two configured
+    /// channels can share a final path segment, and one name can designate
+    /// several URLs.
+    ///
+    /// An entry configured as an absolute URL contributes no name here,
+    /// because it declared none. Conda nonetheless resolves a qualifier
+    /// against such an entry by its final path segment, so a consumer that
+    /// wants conda's full behavior must fall back to matching `channels`
+    /// itself when a qualifier is absent from this map.
+    pub channel_urls_by_name: BTreeMap<String, Vec<String>>,
 }
 
 impl ResolvedChannels {
@@ -56,6 +74,7 @@ impl ResolvedChannels {
         Self {
             channels,
             channel_priority: ChannelPriority::Strict,
+            channel_urls_by_name: BTreeMap::new(),
         }
     }
 }
@@ -228,7 +247,14 @@ pub fn expand_channels(config: &Config) -> Result<ResolvedChannels, ExpandChanne
             || vec!["defaults"],
             |entries| entries.iter().map(String::as_str).collect(),
         );
-    let channels = resolve_role(&channel_entries, &ctx)?;
+    let resolved_entries = channel_entries
+        .iter()
+        .map(|entry| Ok(((*entry).to_string(), resolve_entry(entry, &ctx)?)))
+        .collect::<Result<Vec<_>, ExpandChannelsError>>()?;
+    let channels = resolved_entries
+        .iter()
+        .flat_map(|(_, urls)| urls.iter().cloned())
+        .collect();
     let allowlist_entries = config
         .allowlist_channels
         .as_deref()
@@ -246,10 +272,23 @@ pub fn expand_channels(config: &Config) -> Result<ResolvedChannels, ExpandChanne
         .collect::<Vec<_>>();
     let denylist = resolve_role(&denylist_entries, &ctx)?;
     let channels = apply_allow_deny(channels, &allowlist, &denylist);
+    let surviving: HashSet<&str> = channels.iter().map(String::as_str).collect();
+    let channel_urls_by_name = resolved_entries
+        .into_iter()
+        .filter(|(entry, _)| !has_scheme(entry))
+        .filter_map(|(name, urls)| {
+            let kept: Vec<String> = urls
+                .into_iter()
+                .filter(|url| surviving.contains(url.as_str()))
+                .collect();
+            (!kept.is_empty()).then_some((name, kept))
+        })
+        .collect();
 
     Ok(ResolvedChannels {
         channels,
         channel_priority: config.channel_priority.unwrap_or(ChannelPriority::Flexible),
+        channel_urls_by_name,
     })
 }
 
@@ -531,5 +570,160 @@ mod tests {
             resolved.channels,
             strings(&["https://internal.example.com/acme"])
         );
+    }
+
+    #[test]
+    fn expand_channels_maps_each_named_entry_to_the_urls_it_resolved_to() {
+        // Given
+        let config = Config {
+            channels: Some(strings(&["acme", "community"])),
+            channel_alias: Some("https://conda.example.org".to_string()),
+            custom_channels: Some(BTreeMap::from([(
+                "acme".to_string(),
+                "https://internal.example.com".to_string(),
+            )])),
+            ..Config::default()
+        };
+
+        // When
+        let resolved = expand_channels(&config).unwrap();
+
+        // Then
+        assert_eq!(
+            resolved.channel_urls_by_name,
+            BTreeMap::from([
+                (
+                    "acme".to_string(),
+                    strings(&["https://internal.example.com/acme"])
+                ),
+                (
+                    "community".to_string(),
+                    strings(&["https://conda.example.org/community"])
+                ),
+            ])
+        );
+    }
+
+    #[test]
+    fn expand_channels_maps_a_multichannel_name_to_every_member() {
+        // Given
+        let config = Config {
+            channels: Some(strings(&["bundle"])),
+            channel_alias: Some("https://conda.example.org".to_string()),
+            custom_multichannels: Some(BTreeMap::from([(
+                "bundle".to_string(),
+                strings(&["one", "two"]),
+            )])),
+            ..Config::default()
+        };
+
+        // When
+        let resolved = expand_channels(&config).unwrap();
+
+        // Then
+        assert_eq!(
+            resolved.channel_urls_by_name.get("bundle").cloned(),
+            Some(strings(&[
+                "https://conda.example.org/one",
+                "https://conda.example.org/two"
+            ]))
+        );
+    }
+
+    #[test]
+    fn expand_channels_omits_a_name_whose_urls_were_all_filtered_out() {
+        // Given: `blocked` resolves, then loses every URL to the denylist, so
+        // keeping its mapping would let a consumer resurrect a denied channel.
+        let config = Config {
+            channels: Some(strings(&["kept", "blocked"])),
+            channel_alias: Some("https://conda.example.org".to_string()),
+            denylist_channels: Some(strings(&["blocked"])),
+            ..Config::default()
+        };
+
+        // When
+        let resolved = expand_channels(&config).unwrap();
+
+        // Then
+        assert!(resolved.channel_urls_by_name.contains_key("kept"));
+        assert!(!resolved.channel_urls_by_name.contains_key("blocked"));
+    }
+
+    #[test]
+    fn expand_channels_maps_the_implicit_defaults_entry_when_channels_is_absent() {
+        // Given: no `channels`, so `defaults` is substituted and is a name.
+        let config = Config {
+            default_channels: Some(strings(&["https://repo.example/main"])),
+            ..Config::default()
+        };
+
+        // When
+        let resolved = expand_channels(&config).unwrap();
+
+        // Then
+        assert_eq!(
+            resolved.channel_urls_by_name.get("defaults").cloned(),
+            Some(strings(&["https://repo.example/main"]))
+        );
+    }
+
+    #[test]
+    fn expand_channels_keeps_only_the_surviving_members_of_a_partly_filtered_name() {
+        // Given: one of `bundle`'s two members is denylisted.
+        let config = Config {
+            channels: Some(strings(&["bundle"])),
+            channel_alias: Some("https://conda.example.org".to_string()),
+            custom_multichannels: Some(BTreeMap::from([(
+                "bundle".to_string(),
+                strings(&["one", "two"]),
+            )])),
+            denylist_channels: Some(strings(&["two"])),
+            ..Config::default()
+        };
+
+        // When
+        let resolved = expand_channels(&config).unwrap();
+
+        // Then
+        assert_eq!(
+            resolved.channel_urls_by_name.get("bundle").cloned(),
+            Some(strings(&["https://conda.example.org/one"]))
+        );
+    }
+
+    #[test]
+    fn expand_channels_maps_a_repeated_name_once_without_duplicating_its_urls() {
+        // Given
+        let config = Config {
+            channels: Some(strings(&["acme", "acme"])),
+            channel_alias: Some("https://conda.example.org".to_string()),
+            ..Config::default()
+        };
+
+        // When
+        let resolved = expand_channels(&config).unwrap();
+
+        // Then
+        assert_eq!(
+            resolved.channel_urls_by_name.get("acme").cloned(),
+            Some(strings(&["https://conda.example.org/acme"]))
+        );
+    }
+
+    #[test]
+    fn expand_channels_maps_no_name_for_an_entry_configured_as_a_url() {
+        // Given: a URL entry declared no name, so it contributes none here.
+        // Conda still resolves a qualifier against it by final path segment,
+        // which is the consumer's fallback rather than this map's job.
+        let config = Config {
+            channels: Some(strings(&["https://repo.example/chan"])),
+            ..Config::default()
+        };
+
+        // When
+        let resolved = expand_channels(&config).unwrap();
+
+        // Then
+        assert!(resolved.channel_urls_by_name.is_empty());
     }
 }

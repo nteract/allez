@@ -7,7 +7,7 @@
 //!
 //! Run with: `ALLEZ_EPHEMERAL_ROOT=/tmp/allez-smoke cargo run --example ephemeral_smoke`
 
-use allez::ephemeral::{RequestedPackages, create_ephemeral_environment};
+use allez::ephemeral::{PackageRequest, create_ephemeral_environment};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -16,9 +16,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let channel_url = rattler_conda_types::Channel::try_from_directory(&fixture)?.canonical_name();
     let channels = condarc::ResolvedChannels::from_channels(vec![channel_url]);
     let ready = create_ephemeral_environment(
-        RequestedPackages::Explicit(vec![allez::ephemeral::PackageSpec::parse("fixture-probe")?]),
+        PackageRequest {
+            explicit: vec![allez::ephemeral::PackageSpec::parse("fixture-probe")?],
+            defaults: Vec::new(),
+        },
         channels,
-        None,
     )
     .await?;
     println!("environment ready at {}", ready.location.display());

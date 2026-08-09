@@ -1,15 +1,16 @@
 //! `.condarc` file handling and channel-configuration resolution.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use condarc::Config;
 
+mod document;
 mod events;
 mod locate;
 
 use events::emit_fallback;
-use locate::{ReadOutcome, read_condarc};
 
+pub(crate) use document::{CondarcDocument, resolve_document};
 pub use events::FallbackReason;
 
 /// The result of one channel-configuration resolution call. A
@@ -101,32 +102,21 @@ fn into_resolution(
     }
 }
 
-pub(crate) fn resolve_channel_config_from(path: Option<&Path>) -> ChannelConfigResolution {
-    let Some(path) = path else {
-        return into_resolution(default_resolved_channels(), None);
-    };
-
-    let contents = match read_condarc(path) {
-        Ok(contents) => contents,
-        Err(ReadOutcome::Missing) => return into_resolution(default_resolved_channels(), None),
-        Err(ReadOutcome::Unreadable(error)) => {
-            emit_fallback(FallbackReason::Unreadable, &error.to_string());
-            return into_resolution(
-                default_resolved_channels(),
-                Some(FallbackReason::Unreadable),
-            );
+/// The channel-specific half of resolution, separate from the shared
+/// `.condarc` I/O step: expands `document`'s channel settings when it
+/// parsed, else falls back to conda's own documented defaults. May emit
+/// its own `Rejected` fallback event for a channel-expansion failure —
+/// a case distinct from the shared read/parse step's own failures.
+pub(crate) fn channels_from_document(document: &CondarcDocument) -> ChannelConfigResolution {
+    let config = match document {
+        CondarcDocument::Parsed(config) => config,
+        CondarcDocument::Absent => return into_resolution(default_resolved_channels(), None),
+        CondarcDocument::FellBack(reason) => {
+            return into_resolution(default_resolved_channels(), Some(*reason));
         }
     };
 
-    let config = match condarc::parse(&contents) {
-        Ok(config) => config,
-        Err(report) => {
-            emit_fallback(FallbackReason::Rejected, &report.to_string());
-            return into_resolution(default_resolved_channels(), Some(FallbackReason::Rejected));
-        }
-    };
-
-    match condarc::expand_channels(&config) {
+    match condarc::expand_channels(config) {
         Ok(resolved) => into_resolution(resolved, None),
         Err(error) => {
             emit_fallback(FallbackReason::Rejected, &error.to_string());
@@ -135,9 +125,21 @@ pub(crate) fn resolve_channel_config_from(path: Option<&Path>) -> ChannelConfigR
     }
 }
 
+/// Test seam: the whole path-to-resolution pipeline, driven from an
+/// explicit `.condarc` path. Production code composes
+/// [`resolve_document`] with [`channels_from_document`] directly instead.
+#[cfg(test)]
+pub(crate) fn resolve_channel_config_from(
+    path: Option<&std::path::Path>,
+) -> ChannelConfigResolution {
+    let document = document::resolve_document_from(path);
+    channels_from_document(&document)
+}
+
 /// Resolves the current user's `.condarc`, falling back to conda's defaults.
 pub fn resolve_channel_config() -> ChannelConfigResolution {
-    resolve_channel_config_from(default_condarc_path().as_deref())
+    let document = resolve_document();
+    channels_from_document(&document)
 }
 
 #[cfg(test)]

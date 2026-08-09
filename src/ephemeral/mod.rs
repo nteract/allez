@@ -29,9 +29,24 @@ mod solve;
 mod cleanup_tests;
 
 pub use channels::redact_channel_url;
-pub use defaults::{DEFAULT_PACKAGES, InvalidPackageSpec, PackageSpec, RequestedPackages};
+pub(crate) use defaults::parse_explicit_packages;
+pub use defaults::{InvalidPackageSpec, PackageSpec};
 pub use error::{ActivationError, CreationFailure, EphemeralEnvError};
 pub use lifecycle::{EnvironmentId, InstalledPackage, ReadyEnvironment};
+
+/// The two package lists [`create_ephemeral_environment`] merges into the
+/// Effective Package Set. Named fields rather than two adjacent
+/// `Vec<PackageSpec>` parameters, so the asymmetric FR-003/FR-004
+/// precedence between them cannot be inverted by a swapped argument.
+pub struct PackageRequest {
+    /// The caller's own per-invocation package list.
+    pub explicit: Vec<PackageSpec>,
+    /// The caller's resolved default package set. For `allez oneshot`,
+    /// the caller's `.condarc` `create_default_packages` setting; a
+    /// caller with no notion of a configured default passes an empty
+    /// `Vec`.
+    pub defaults: Vec<PackageSpec>,
+}
 
 /// Test-only seam (feature-gated, see `Cargo.toml`'s `test-config-override`):
 /// lets `tests/oneshot_exec.rs`'s harness pre-create an already-owner-only
@@ -55,27 +70,33 @@ use paths::VerifiedRoot;
 
 /// Creates a new ephemeral environment: a system-managed temporary/cache
 /// location (no name or path supplied by the caller), populated with the
-/// requested (or default/overridden) packages, resolved and installed
-/// against `channels`. Resolves once creation finishes, one way or the
-/// other (FR-001).
+/// Effective Package Set — `packages.explicit` merged additively over
+/// `packages.defaults` by bare package name (FR-003/FR-004) — resolved
+/// and installed against `channels`. Resolves once creation finishes, one
+/// way or the other (FR-001).
 ///
-/// `requested` may be `RequestedPackages::Explicit(vec![])` — this is
-/// treated identically to `UseDefaultOrOverride`.
+/// Either list may be empty, and an empty Effective Package Set creates
+/// an environment with zero installed packages rather than failing.
+///
+/// The merge runs as this function's own first step, before any
+/// filesystem or network work begins, so every caller gets FR-003/FR-004's
+/// precedence applied identically.
 ///
 /// The returned [`ReadyEnvironment`] is **not** torn down when it (or its
 /// last clone) is dropped, and there is no way to signal teardown for a
 /// single environment any more — see this module's own doc comment.
 pub async fn create_ephemeral_environment(
-    requested: RequestedPackages,
+    packages: PackageRequest,
     channels: condarc::ResolvedChannels,
-    default_override: Option<Vec<PackageSpec>>,
 ) -> Result<ReadyEnvironment, CreationFailure> {
     let started = Instant::now();
     let id = EnvironmentId::new();
-    let effective_packages = defaults::effective_packages(&requested, default_override.as_deref());
+    let explicit = defaults::attribute(&packages.explicit, defaults::PackageOrigin::Explicit);
+    let defaults_with_positions = defaults::attribute_defaults(&packages.defaults);
+    let effective_packages = defaults::effective_packages(&explicit, &defaults_with_positions);
     let packages: Vec<String> = effective_packages
         .iter()
-        .map(|package| package.as_str().to_string())
+        .map(PackageSpec::safe_label)
         .collect();
 
     let root = match run_blocking(EphemeralEnvError::UnwritableLocation, paths::resolve_root).await

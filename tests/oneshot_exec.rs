@@ -16,6 +16,16 @@
 #[path = "support/ephemeral.rs"]
 mod support;
 
+/// The parent directory of the fixture channel, as a channel base URL, so a
+/// test can declare that channel through `custom_channels`, whose own
+/// semantics are `{name: BASE_URL}` yielding `BASE_URL/name`.
+fn fixture_channel_base() -> String {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    rattler_conda_types::Channel::try_from_directory(&path)
+        .unwrap()
+        .canonical_name()
+}
+
 use std::io::BufRead;
 use std::time::Duration;
 
@@ -37,6 +47,7 @@ struct OneshotHarness {
     condarc: tempfile::NamedTempFile,
     _outer_dir: tempfile::TempDir,
     root: std::path::PathBuf,
+    working_directory: Option<std::path::PathBuf>,
 }
 
 impl OneshotHarness {
@@ -70,11 +81,63 @@ impl OneshotHarness {
             condarc,
             _outer_dir,
             root,
+            working_directory: None,
         }
+    }
+
+    /// Runs every subsequent invocation with `directory` as its own
+    /// working directory, so a project-local `.condarc` planted there is
+    /// discoverable by the subprocess (and must still be ignored).
+    fn in_directory(mut self, directory: std::path::PathBuf) -> Self {
+        self.working_directory = Some(directory);
+        self
     }
 
     fn root_path(&self) -> &std::path::Path {
         &self.root
+    }
+
+    /// The name of every package installed into the one environment this
+    /// harness's root holds, read from that environment's own
+    /// `conda-meta` records.
+    fn installed_package_names(&self) -> std::collections::BTreeSet<String> {
+        let mut environments = std::fs::read_dir(self.root.join("envs"))
+            .expect("the ephemeral root should hold an envs directory")
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            environments.len(),
+            1,
+            "expected exactly one created environment, found {environments:?}"
+        );
+        let conda_meta = environments.remove(0).join("conda-meta");
+        let records = std::fs::read_dir(&conda_meta).unwrap_or_else(|error| {
+            panic!(
+                "a created environment must hold a readable conda-meta directory at \
+                 {conda_meta:?}, found {error}"
+            )
+        });
+        records
+            .map(|entry| {
+                entry
+                    .expect("every conda-meta entry should be readable")
+                    .path()
+            })
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "json")
+            })
+            .map(|path| {
+                let contents = std::fs::read_to_string(&path)
+                    .unwrap_or_else(|error| panic!("reading {path:?} failed: {error}"));
+                let record: serde_json::Value = serde_json::from_str(&contents)
+                    .unwrap_or_else(|error| panic!("parsing {path:?} failed: {error}"));
+                record["name"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("{path:?} carries no `name` field"))
+                    .to_string()
+            })
+            .collect()
     }
 
     fn command(&self) -> Command {
@@ -82,6 +145,9 @@ impl OneshotHarness {
         command
             .env("ALLEZ_CONDARC_PATH", self.condarc.path())
             .env("ALLEZ_EPHEMERAL_ROOT", &self.root);
+        if let Some(directory) = &self.working_directory {
+            command.current_dir(directory);
+        }
         command
     }
 
@@ -90,6 +156,9 @@ impl OneshotHarness {
         command
             .env("ALLEZ_CONDARC_PATH", self.condarc.path())
             .env("ALLEZ_EPHEMERAL_ROOT", &self.root);
+        if let Some(directory) = &self.working_directory {
+            command.current_dir(directory);
+        }
         command
     }
 
@@ -99,6 +168,18 @@ impl OneshotHarness {
     fn run(&self, args: &[&str]) -> (i32, String, String) {
         let mut command = self.command();
         command.arg("oneshot").args(args);
+        self.capture(command)
+    }
+
+    /// Runs with `--human`, selecting human-readable rendering instead of
+    /// the default JSON envelope.
+    fn run_human(&self, args: &[&str]) -> (i32, String, String) {
+        let mut command = self.command();
+        command.arg("--human").arg("oneshot").args(args);
+        self.capture(command)
+    }
+
+    fn capture(&self, mut command: Command) -> (i32, String, String) {
         let output = command.output().unwrap();
         let code = output.status.code().unwrap_or(-1);
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -181,20 +262,373 @@ fn scenario_c_4_exactly_one_schema_versioned_tracing_record_on_success() {
     );
 }
 
-/// Scenario 1.2: zero packages routes through package resolution (not a
-/// usage error), proving `RequestedPackages::UseDefaultOrOverride` was
-/// reached — not that `DEFAULT_PACKAGES = ["python"]` itself resolves
-/// offline against the fixture channel.
+/// Scenario GEN-30 1.1 (US1-AS1/FR-001): with no per-invocation
+/// packages, the environment gets exactly the caller's own `.condarc`
+/// `create_default_packages` list.
 #[test]
-fn scenario_1_2_zero_packages_routes_through_resolution_not_usage_error() {
+fn scenario_gen30_1_1_default_packages_from_condarc_with_no_overrides() {
+    let harness = OneshotHarness::with_condarc_contents(&format!(
+        "channels: [\"{}\"]\ncreate_default_packages: [fixture-default-alpha]\n",
+        support::fixture_channel("")
+    ));
+
+    let (code, _stdout, stderr) = harness.run(&["--", "echo", "hi"]);
+
+    assert_eq!(code, 0, "stderr={stderr}");
+    assert_eq!(
+        harness.installed_package_names(),
+        std::collections::BTreeSet::from(["fixture-default-alpha".to_string()])
+    );
+}
+
+/// Scenario GEN-30 1.2 (US1-AS2/FR-002): no `create_default_packages`
+/// key at all plus no per-invocation packages succeeds with zero
+/// installed packages — there is no `allez`-authored fallback list.
+#[test]
+fn scenario_gen30_1_2_no_default_packages_configured_creates_empty_environment() {
     let harness = OneshotHarness::new();
+
+    let (code, _stdout, stderr) = harness.run(&["--", "echo", "hi"]);
+
+    assert_eq!(code, 0, "stderr={stderr}");
+    let installed = harness.installed_package_names();
+    assert!(
+        installed.is_empty(),
+        "expected an empty installed set, found {installed:?}"
+    );
+}
+
+/// Scenario GEN-30 project-local config (spec.md Edge Case): a `.condarc`
+/// in the invocation's own working directory is never consulted — only
+/// the invoking user's own file is.
+#[test]
+fn scenario_gen30_ignores_project_local_condarc() {
+    let project_directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        project_directory.path().join(".condarc"),
+        format!(
+            "channels: [\"{}\"]\ncreate_default_packages: [fixture-default-beta]\n",
+            support::fixture_channel("")
+        ),
+    )
+    .unwrap();
+    let harness = OneshotHarness::with_condarc_contents(&format!(
+        "channels: [\"{}\"]\ncreate_default_packages: [fixture-default-alpha]\n",
+        support::fixture_channel("")
+    ))
+    .in_directory(project_directory.path().to_path_buf());
+
+    let (code, _stdout, stderr) = harness.run(&["--", "echo", "hi"]);
+
+    assert_eq!(code, 0, "stderr={stderr}");
+    assert_eq!(
+        harness.installed_package_names(),
+        std::collections::BTreeSet::from(["fixture-default-alpha".to_string()])
+    );
+}
+
+/// Scenario GEN-30 2.1 (US2-AS1/FR-003): a per-invocation package
+/// sharing no bare name with the resolved default set is added to it.
+#[test]
+fn scenario_gen30_2_1_per_invocation_package_adds_to_default_set() {
+    let harness = OneshotHarness::with_condarc_contents(&format!(
+        "channels: [\"{}\"]\ncreate_default_packages: [fixture-default-alpha]\n",
+        support::fixture_channel("")
+    ));
+    #[cfg(unix)]
+    let probe = "fixture-probe";
+    #[cfg(windows)]
+    let probe = "fixture-probe.cmd";
+
+    let (code, _stdout, stderr) = harness.run(&["fixture-probe", "--", probe]);
+
+    assert_eq!(code, 0, "stderr={stderr}");
+    assert_eq!(
+        harness.installed_package_names(),
+        std::collections::BTreeSet::from([
+            "fixture-default-alpha".to_string(),
+            "fixture-probe".to_string(),
+        ])
+    );
+}
+
+/// Scenario GEN-30 2.2 (US2-AS2/FR-004): a per-invocation package whose
+/// bare name matches a default entry supersedes that entry. The default
+/// entry pins a version absent from the fixture channel, so the solve
+/// could only succeed if supersede actually dropped it.
+#[test]
+fn scenario_gen30_2_2_per_invocation_package_supersedes_matching_default_entry() {
+    let harness = OneshotHarness::with_condarc_contents(&format!(
+        "channels: [\"{}\"]\ncreate_default_packages: [fixture-default-alpha=9.9.9]\n",
+        support::fixture_channel("")
+    ));
+
+    let (code, _stdout, stderr) = harness.run(&["fixture-default-alpha", "--", "echo", "hi"]);
+
+    assert_eq!(code, 0, "stderr={stderr}");
+    assert_eq!(
+        harness.installed_package_names(),
+        std::collections::BTreeSet::from(["fixture-default-alpha".to_string()])
+    );
+}
+
+/// Scenario GEN-30 malformed default entry: `create_default_packages` is
+/// never validated on the way in (FR-002), so a syntactically invalid
+/// entry surfaces at solve time, and must name `create_default_packages`
+/// as its source, since nothing on the command line produced it.
+#[test]
+fn scenario_gen30_malformed_default_entry_reports_its_condarc_source() {
+    let harness = OneshotHarness::with_condarc_contents(&format!(
+        "channels: [\"{}\"]\ncreate_default_packages: [\"[[[not a spec\"]\n",
+        support::fixture_channel("")
+    ));
+
     let (code, stdout, stderr) = harness.run(&["--", "echo", "hi"]);
+
     assert_eq!(code, 1, "stderr={stderr}");
     let body = parse_stderr_json(&stderr);
     assert_eq!(body["category"], "unresolvable_package");
+    assert_eq!(
+        body["message"],
+        "could not resolve package `<create_default_packages entry 1>` from `.condarc` \
+         `create_default_packages`"
+    );
     assert!(
         !stdout.contains("hi"),
         "pass-through must never have started: {stdout}"
+    );
+}
+
+/// Scenario GEN-30 channel-qualified default (FR-002): a
+/// `create_default_packages` entry qualified by a channel the caller
+/// declared by name resolves against that channel, matching conda's own
+/// `<channel>::<package>` semantics.
+#[test]
+fn scenario_gen30_channel_qualified_default_resolves_against_its_configured_channel() {
+    let harness = OneshotHarness::with_condarc_contents(&format!(
+        "custom_channels:\n  ephemeral_channel: {}\nchannels: [ephemeral_channel]\n\
+         create_default_packages: [ephemeral_channel::fixture-default-alpha]\n",
+        fixture_channel_base()
+    ));
+
+    let (code, _stdout, stderr) = harness.run(&["--", "echo", "hi"]);
+
+    assert_eq!(code, 0, "stderr={stderr}");
+    assert_eq!(
+        harness.installed_package_names(),
+        std::collections::BTreeSet::from(["fixture-default-alpha".to_string()])
+    );
+}
+
+/// Scenario GEN-30 multi-entry default failure: with more than one
+/// unresolvable entry there is no single culprit to name, but the failure
+/// must still point at `create_default_packages` rather than the command
+/// line, which named nothing.
+#[test]
+fn scenario_gen30_multiple_default_entries_still_report_their_condarc_source() {
+    let harness = OneshotHarness::with_condarc_contents(&format!(
+        "channels: [\"{}\"]\ncreate_default_packages: [fixture-default-alpha, fixture-nope]\n",
+        support::fixture_channel("")
+    ));
+
+    let (code, stdout, stderr) = harness.run(&["--", "echo", "hi"]);
+
+    assert_eq!(code, 1, "stderr={stderr}");
+    let body = parse_stderr_json(&stderr);
+    assert_eq!(body["category"], "unresolvable_package");
+    assert_eq!(
+        body["message"],
+        "could not resolve packages from `.condarc` `create_default_packages`"
+    );
+    assert!(
+        !stdout.contains("hi"),
+        "pass-through must never have started: {stdout}"
+    );
+}
+
+/// Scenario GEN-30 human rendering: `--human` carries the same
+/// `.condarc` attribution as the JSON envelope, without a JSON body.
+#[test]
+fn scenario_gen30_human_rendering_reports_the_condarc_source() {
+    let harness = OneshotHarness::with_condarc_contents(&format!(
+        "channels: [\"{}\"]\ncreate_default_packages: [\"[[[not a spec\"]\n",
+        support::fixture_channel("")
+    ));
+
+    let (code, _stdout, stderr) = harness.run_human(&["--", "echo", "hi"]);
+
+    assert_eq!(code, 1, "stderr={stderr}");
+    assert_eq!(
+        stderr.trim(),
+        "error: could not resolve package `<create_default_packages entry 1>` from `.condarc` \
+         `create_default_packages`"
+    );
+    assert!(
+        !stderr.contains('{'),
+        "human output must carry no JSON envelope: {stderr}"
+    );
+}
+
+/// Scenario GEN-30 multichannel qualifier: a name designating several
+/// channels cannot be expressed as one match spec's channel, so it fails
+/// loudly rather than silently binding to one arbitrary member. This is a
+/// known, deliberate divergence from conda, which resolves it.
+#[test]
+fn scenario_gen30_multichannel_qualified_default_fails_rather_than_guessing() {
+    let harness = OneshotHarness::with_condarc_contents(&format!(
+        "custom_multichannels:\n  bundle:\n    - {}\n    - {}\nchannels: [bundle]\n\
+         create_default_packages: [bundle::fixture-priority]\n",
+        support::fixture_channel("priority-a"),
+        support::fixture_channel("priority-b")
+    ));
+
+    let (code, _stdout, stderr) = harness.run(&["--", "echo", "hi"]);
+
+    assert_eq!(code, 1, "stderr={stderr}");
+    let body = parse_stderr_json(&stderr);
+    assert_eq!(body["category"], "unresolvable_package");
+}
+
+/// Scenario GEN-30 qualified per-invocation package: the same qualifier
+/// resolution applies to a package named on the command line, not only to
+/// a `create_default_packages` entry.
+#[test]
+fn scenario_gen30_channel_qualified_explicit_package_resolves() {
+    let harness = OneshotHarness::with_condarc_contents(&format!(
+        "custom_channels:\n  ephemeral_channel: {}\nchannels: [ephemeral_channel]\n",
+        fixture_channel_base()
+    ));
+
+    let (code, _stdout, stderr) = harness.run(&[
+        "ephemeral_channel::fixture-default-alpha",
+        "--",
+        "echo",
+        "hi",
+    ]);
+
+    assert_eq!(code, 0, "stderr={stderr}");
+    assert_eq!(
+        harness.installed_package_names(),
+        std::collections::BTreeSet::from(["fixture-default-alpha".to_string()])
+    );
+}
+
+/// Scenario GEN-30 human rendering of the request-level default failure:
+/// the plural message carries the same `.condarc` attribution.
+#[test]
+fn scenario_gen30_human_rendering_reports_the_plural_condarc_source() {
+    let harness = OneshotHarness::with_condarc_contents(&format!(
+        "channels: [\"{}\"]\ncreate_default_packages: [fixture-default-alpha, fixture-nope]\n",
+        support::fixture_channel("")
+    ));
+
+    let (code, _stdout, stderr) = harness.run_human(&["--", "echo", "hi"]);
+
+    assert_eq!(code, 1, "stderr={stderr}");
+    assert_eq!(
+        stderr.trim(),
+        "error: could not resolve packages from `.condarc` `create_default_packages`"
+    );
+}
+
+/// Scenario GEN-30 denylisted qualifier: a channel removed by policy leaves
+/// no name behind, so its name cannot be used to reach it again.
+#[test]
+fn scenario_gen30_a_denylisted_channels_name_cannot_be_used_as_a_qualifier() {
+    let harness = OneshotHarness::with_condarc_contents(&format!(
+        "custom_channels:\n  ephemeral_channel: {base}\nchannels: [ephemeral_channel]\n\
+         denylist_channels: [ephemeral_channel]\n\
+         create_default_packages: [ephemeral_channel::fixture-default-alpha]\n",
+        base = fixture_channel_base()
+    ));
+
+    let (code, _stdout, stderr) = harness.run(&["--", "echo", "hi"]);
+
+    assert_eq!(code, 1, "stderr={stderr}");
+    let body = parse_stderr_json(&stderr);
+    assert_eq!(body["category"], "no_channels_configured");
+}
+
+/// Scenario GEN-30 entry position: a failing `create_default_packages` entry
+/// is identified by its own one-based position, not the first entry's.
+#[test]
+fn scenario_gen30_reports_the_position_of_the_failing_default_entry() {
+    let harness = OneshotHarness::with_condarc_contents(&format!(
+        "channels: [\"{}\"]\ncreate_default_packages: [fixture-default-alpha, \"[[[not a spec\"]\n",
+        support::fixture_channel("")
+    ));
+
+    let (code, _stdout, stderr) = harness.run(&["--", "echo", "hi"]);
+
+    assert_eq!(code, 1, "stderr={stderr}");
+    let body = parse_stderr_json(&stderr);
+    assert_eq!(
+        body["message"],
+        "could not resolve package `<create_default_packages entry 2>` from `.condarc` \
+         `create_default_packages`"
+    );
+}
+
+/// Scenario GEN-30 command-line position: an invalid package argument is
+/// identified by its own one-based position, and its text is not echoed.
+#[test]
+fn scenario_gen30_reports_the_position_of_an_invalid_command_line_package() {
+    let harness = OneshotHarness::with_condarc_contents(&format!(
+        "channels: [\"{}\"]\n",
+        support::fixture_channel("")
+    ));
+
+    let (code, _stdout, stderr) =
+        harness.run(&["fixture-probe", "//user:hunter2@host/x", "--", "echo", "hi"]);
+
+    assert_eq!(code, 1, "stderr={stderr}");
+    let body = parse_stderr_json(&stderr);
+    assert_eq!(
+        body["message"],
+        "could not resolve package `<command-line package 2>`"
+    );
+    assert!(!stderr.contains("hunter2"), "stderr={stderr}");
+}
+
+/// Scenario GEN-30 tracing: the lifecycle event's `packages` field carries
+/// safe labels, so a credential-bearing default cannot reach a trace.
+#[test]
+fn scenario_gen30_lifecycle_event_packages_carry_safe_labels() {
+    // Given: a `create_default_packages` entry that both embeds a
+    // credential and fails to resolve, so a lifecycle failure event is
+    // guaranteed to fire with this package in its `packages` field --
+    // an earlier version of this test used a *resolvable* entry with no
+    // embedded credential, which could pass vacuously without proving any
+    // event carrying that field was ever actually emitted.
+    let harness = OneshotHarness::with_condarc_contents(&format!(
+        "channels: [\"{}\"]\ncreate_default_packages: [\"fixture-nope?access_token=TOPSECRET123\"]\n",
+        support::fixture_channel("")
+    ));
+
+    let output = harness
+        .command()
+        .env("RUST_LOG", "debug")
+        .args(["oneshot", "--", "echo", "hi"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1), "output={output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // The final rendered error message also names the safe label, so
+    // checking for that substring anywhere in `stderr` would pass even if
+    // no lifecycle event ever carried it -- require a line that is
+    // specifically a lifecycle event (identified by its own `message`
+    // field) to also carry the safe label.
+    assert!(
+        stderr
+            .lines()
+            .any(|line| line.contains("ephemeral environment lifecycle")
+                && line.contains("create_default_packages entry 1")),
+        "a lifecycle event's own line must carry the safe label: {stderr}"
+    );
+    assert!(
+        !stderr.contains("TOPSECRET123"),
+        "the embedded credential must never reach a trace: {stderr}"
     );
 }
 

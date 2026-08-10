@@ -17,8 +17,28 @@ pub enum EphemeralEnvError {
         /// The package whose requirements could not be resolved.
         package: String,
     },
+    /// A `create_default_packages` entry from the caller's own `.condarc`
+    /// could not be resolved. Distinct from [`Self::UnresolvablePackage`]
+    /// so the message can point at the configuration file the caller has
+    /// to edit, rather than at a command line that never named it.
+    UnresolvableDefaultPackage {
+        /// The `create_default_packages` entry that could not be resolved.
+        package: String,
+    },
     /// Resolution failed without identifying one specific requested package.
     ResolutionFailed,
+    /// A `<channel>::<package>` qualifier names more than one configured
+    /// channel, which one match spec cannot express. Reported rather than
+    /// guessed at, so no package is installed from an unintended member.
+    AmbiguousChannelQualifier {
+        /// The channel name that designates several channels.
+        qualifier: String,
+    },
+    /// Resolution failed for a package set that came entirely from the
+    /// caller's own `.condarc` `create_default_packages`, without
+    /// identifying one specific entry. The request-level counterpart to
+    /// [`Self::UnresolvableDefaultPackage`].
+    UnresolvableDefaultPackages,
     /// A package artifact failed integrity verification.
     IntegrityVerificationFailed {
         /// The package whose artifact failed verification.
@@ -38,7 +58,16 @@ impl fmt::Debug for EphemeralEnvError {
                 .debug_struct("UnresolvablePackage")
                 .field("package", &redact_channel_url(package))
                 .finish(),
+            Self::UnresolvableDefaultPackage { package } => formatter
+                .debug_struct("UnresolvableDefaultPackage")
+                .field("package", &redact_channel_url(package))
+                .finish(),
             Self::ResolutionFailed => formatter.write_str("ResolutionFailed"),
+            Self::AmbiguousChannelQualifier { qualifier } => formatter
+                .debug_struct("AmbiguousChannelQualifier")
+                .field("qualifier", &redact_channel_url(qualifier))
+                .finish(),
+            Self::UnresolvableDefaultPackages => formatter.write_str("UnresolvableDefaultPackages"),
             Self::IntegrityVerificationFailed { package } => formatter
                 .debug_struct("IntegrityVerificationFailed")
                 .field("package", &redact_channel_url(package))
@@ -53,7 +82,11 @@ impl CategorizedError for EphemeralEnvError {
     fn category(&self) -> &'static str {
         match self {
             Self::NoChannelsConfigured => "no_channels_configured",
-            Self::UnresolvablePackage { .. } | Self::ResolutionFailed => "unresolvable_package",
+            Self::UnresolvablePackage { .. }
+            | Self::UnresolvableDefaultPackage { .. }
+            | Self::UnresolvableDefaultPackages
+            | Self::AmbiguousChannelQualifier { .. }
+            | Self::ResolutionFailed => "unresolvable_package",
             Self::IntegrityVerificationFailed { .. } => "integrity_verification_failed",
             Self::UnwritableLocation => "unwritable_location",
             Self::TeardownFailed => "teardown_failed",
@@ -72,7 +105,23 @@ impl fmt::Display for EphemeralEnvError {
                     redact_channel_url(package)
                 )
             }
+            Self::UnresolvableDefaultPackage { package } => {
+                write!(
+                    formatter,
+                    "could not resolve package `{}` from `.condarc` `create_default_packages`",
+                    redact_channel_url(package)
+                )
+            }
             Self::ResolutionFailed => write!(formatter, "could not resolve requested packages"),
+            Self::AmbiguousChannelQualifier { qualifier } => write!(
+                formatter,
+                "channel `{}` names more than one channel; qualify with a single channel URL instead",
+                redact_channel_url(qualifier)
+            ),
+            Self::UnresolvableDefaultPackages => write!(
+                formatter,
+                "could not resolve packages from `.condarc` `create_default_packages`"
+            ),
             Self::IntegrityVerificationFailed { package } => {
                 write!(
                     formatter,
@@ -169,6 +218,22 @@ mod tests {
             ),
             (EphemeralEnvError::ResolutionFailed, "unresolvable_package"),
             (
+                EphemeralEnvError::AmbiguousChannelQualifier {
+                    qualifier: "bundle".to_string(),
+                },
+                "unresolvable_package",
+            ),
+            (
+                EphemeralEnvError::UnresolvableDefaultPackages,
+                "unresolvable_package",
+            ),
+            (
+                EphemeralEnvError::UnresolvableDefaultPackage {
+                    package: "numpy".to_string(),
+                },
+                "unresolvable_package",
+            ),
+            (
                 EphemeralEnvError::IntegrityVerificationFailed {
                     package: "numpy".to_string(),
                 },
@@ -244,6 +309,72 @@ mod tests {
         let error = EphemeralEnvError::ResolutionFailed;
 
         assert_eq!(error.to_string(), "could not resolve requested packages");
+    }
+
+    #[test]
+    fn request_level_default_failure_names_condarc_without_naming_a_package() {
+        // Given
+        let error = EphemeralEnvError::UnresolvableDefaultPackages;
+
+        // When
+        let message = error.to_string();
+
+        // Then
+        assert_eq!(
+            message,
+            "could not resolve packages from `.condarc` `create_default_packages`"
+        );
+    }
+
+    #[test]
+    fn unresolvable_default_package_display_names_its_condarc_source() {
+        // Given
+        let error = EphemeralEnvError::UnresolvableDefaultPackage {
+            package: "[[[not a spec".to_string(),
+        };
+
+        // When
+        let message = error.to_string();
+
+        // Then
+        assert_eq!(
+            message,
+            "could not resolve package `[[[not a spec` from `.condarc` `create_default_packages`"
+        );
+    }
+
+    #[test]
+    fn unresolvable_default_package_display_redacts_a_credential_bearing_spec() {
+        // Given
+        let error = EphemeralEnvError::UnresolvableDefaultPackage {
+            package: "https://user:password@repo.example/t/token-123/conda-forge::numpy"
+                .to_string(),
+        };
+
+        // When
+        let message = error.to_string();
+
+        // Then
+        assert!(!message.contains("user:password"));
+        assert!(!message.contains("token-123"));
+        assert!(message.contains("create_default_packages"));
+    }
+
+    #[test]
+    fn unresolvable_default_package_debug_redacts_a_credential_bearing_spec() {
+        // Given
+        let error = EphemeralEnvError::UnresolvableDefaultPackage {
+            package: "https://user:password@repo.example/t/token-123/conda-forge::numpy"
+                .to_string(),
+        };
+
+        // When
+        let message = format!("{error:?}");
+
+        // Then
+        assert!(!message.contains("user:password"));
+        assert!(!message.contains("token-123"));
+        assert!(message.contains("UnresolvableDefaultPackage"));
     }
 
     #[test]

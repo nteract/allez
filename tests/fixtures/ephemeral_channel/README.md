@@ -16,13 +16,16 @@ archive bytes.
 
 `fixture-default-alpha` `1.0.0` and `fixture-default-beta` `1.0.0` are
 dependency-free, noarch root-channel packages meant for tests that need an
-explicit, fixture-resolvable package request. They are no longer
-`DEFAULT_PACKAGES`'s own value: GEN-25 changed `DEFAULT_PACKAGES` to
-`["python"]`, a documented stopgap pending GEN-30's real default/override
-mechanism (see `src/ephemeral/defaults.rs`'s own doc comment) — `python`
-does not resolve against this fixture channel, so any test exercising the
-zero-packages-falls-back-to-`DEFAULT_PACKAGES` code path must assert the
-resulting `unresolvable_package` failure rather than a successful install.
+explicit, fixture-resolvable package request — including GEN-30's tests of a
+`.condarc` `create_default_packages` setting, which name them via a test
+`.condarc` rather than any compiled-in list.
+
+No built-in, `allez`-authored default package list exists at all (GEN-30
+FR-002 removed `DEFAULT_PACKAGES` outright). An ephemeral environment's
+default packages come exclusively from the invoking user's own
+`create_default_packages` setting, so the zero-packages case succeeds with an
+empty installed set rather than falling back to anything this fixture channel
+would have to satisfy.
 
 `fixture-probe` is intentionally not a default-package candidate.
 

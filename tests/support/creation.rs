@@ -1,12 +1,10 @@
 use std::process::Command;
 
-use allez::ephemeral::{
-    DEFAULT_PACKAGES, EphemeralEnvError, RequestedPackages, create_ephemeral_environment,
-};
+use allez::ephemeral::create_ephemeral_environment;
 use condarc::{ChannelPriority, ResolvedChannels};
 
 use crate::support::{
-    EventCapture, TestContext, fixture_channel, installed_names, package_specs, root_fixture_config,
+    EventCapture, TestContext, explicit_only, fixture_channel, installed_names, root_fixture_config,
 };
 
 #[tokio::test(flavor = "current_thread")]
@@ -18,9 +16,8 @@ async fn resolvable_packages_are_installed_and_the_probe_is_usable() {
 
     // When
     let ready = create_ephemeral_environment(
-        package_specs(&requested),
+        explicit_only(&requested),
         root_fixture_config(ChannelPriority::Strict),
-        None,
     )
     .await
     .unwrap();
@@ -40,40 +37,14 @@ async fn resolvable_packages_are_installed_and_the_probe_is_usable() {
 
 #[tokio::test(flavor = "current_thread")]
 #[serial_test::serial]
-async fn empty_package_list_resolves_default_packages_the_fixture_channel_cannot_satisfy() {
-    // Given
-    let _context = TestContext::new("built-in-defaults");
-
-    // When
-    let failure = create_ephemeral_environment(
-        RequestedPackages::Explicit(Vec::new()),
-        root_fixture_config(ChannelPriority::Strict),
-        None,
-    )
-    .await
-    .unwrap_err();
-
-    // Then
-    assert_eq!(DEFAULT_PACKAGES, ["python"]);
-    assert_eq!(
-        failure.error,
-        EphemeralEnvError::UnresolvablePackage {
-            package: "python".to_string()
-        }
-    );
-}
-
-#[tokio::test(flavor = "current_thread")]
-#[serial_test::serial]
 async fn flexible_channel_priority_solves_successfully() {
     // Given
     let _context = TestContext::new("flexible-priority");
 
     // When
     let ready = create_ephemeral_environment(
-        package_specs(&["fixture-probe"]),
+        explicit_only(&["fixture-probe"]),
         root_fixture_config(ChannelPriority::Flexible),
-        None,
     )
     .await
     .unwrap();
@@ -93,7 +64,7 @@ async fn strict_channel_priority_selects_the_first_channels_version() {
     ]);
 
     // When
-    let ready = create_ephemeral_environment(package_specs(&["fixture-priority"]), config, None)
+    let ready = create_ephemeral_environment(explicit_only(&["fixture-priority"]), config)
         .await
         .unwrap();
 
@@ -111,17 +82,15 @@ async fn lifecycle_events_include_consistent_ids_packages_and_durations() {
 
     // When
     let ready = create_ephemeral_environment(
-        package_specs(&["fixture-probe"]),
+        explicit_only(&["fixture-probe"]),
         root_fixture_config(ChannelPriority::Strict),
-        None,
     )
     .await
     .unwrap();
     let successful_id = ready.id.to_string();
     let failure = create_ephemeral_environment(
-        package_specs(&["fixture-corrupt-checksum"]),
+        explicit_only(&["fixture-corrupt-checksum"]),
         root_fixture_config(ChannelPriority::Strict),
-        None,
     )
     .await
     .unwrap_err();
@@ -159,9 +128,8 @@ async fn a_solve_stage_failure_still_emits_an_install_failure_event() {
 
     // When
     let failure = create_ephemeral_environment(
-        package_specs(&["fixture-does-not-exist"]),
+        explicit_only(&["fixture-does-not-exist"]),
         root_fixture_config(ChannelPriority::Strict),
-        None,
     )
     .await
     .unwrap_err();
@@ -192,9 +160,8 @@ async fn a_ready_environment_is_not_torn_down_on_its_own() {
 
     // When
     let ready = create_ephemeral_environment(
-        package_specs(&["fixture-probe"]),
+        explicit_only(&["fixture-probe"]),
         root_fixture_config(ChannelPriority::Strict),
-        None,
     )
     .await
     .unwrap();
@@ -216,9 +183,8 @@ async fn resolved_defaults_channel_installs_a_real_package() {
 
     // When
     let ready = create_ephemeral_environment(
-        package_specs(&["zlib"]),
+        explicit_only(&["zlib"]),
         ResolvedChannels::from_channels(vec!["https://repo.anaconda.com/pkgs/main".to_string()]),
-        None,
     )
     .await
     .unwrap();

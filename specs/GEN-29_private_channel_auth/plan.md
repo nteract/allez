@@ -10,7 +10,7 @@ A channel needs `ALLEZ_CHANNEL_TOKEN` attached to its requests if and only if th
 
 **Language/Version**: Rust, edition 2024, unchanged from the rest of the workspace.
 
-**Primary Dependencies**: existing `rattler` 0.48.0 stack (`rattler_repodata_gateway` 0.31.0, `rattler_solve` 8.0.0, `rattler_cache` 0.10.4, `rattler_conda_types` 0.49.0, `reqwest` 0.13, `tokio`, `condarc`), plus two new direct dependencies already present transitively: `astral-reqwest-middleware` 0.5.1 (imported as `reqwest_middleware`) and `async-trait` 0.1.91. See research.md Decision 2 for the exact `Cargo.toml` lines and the `cargo tree` evidence.
+**Primary Dependencies**: existing `rattler` 0.48.0 stack (`rattler_repodata_gateway` 0.31.0, `rattler_solve` 8.0.0, `rattler_cache` 0.10.4, `rattler_conda_types` 0.49.0, `reqwest` 0.13, `tokio`, `condarc`), plus three new direct dependencies already present transitively: `astral-reqwest-middleware` 0.5.1 (imported as `reqwest_middleware`), `async-trait` 0.1.91, and `http` 1.4.2 (needed directly for `http::HeaderValue`, since a crate may only reference a transitive dependency's items through a direct dependency's own re-export, and `channel_auth.rs` builds an `http::HeaderValue` directly). See research.md Decision 2 for the exact `Cargo.toml` lines and the `cargo tree` evidence.
 
 **Storage**: N/A — the token is read from the process environment once per invocation and never written anywhere (FR-007).
 
@@ -32,17 +32,15 @@ A channel needs `ALLEZ_CHANNEL_TOKEN` attached to its requests if and only if th
 |---|---|
 | I. Code Quality | `channel_auth.rs` has one responsibility: classify, then build the authenticating client. No `unsafe`. |
 | II. Testing Standards | Every FR and acceptance scenario maps to at least one planned test; see data-model.md's coverage table. |
-| III. Dual-Primary Interface | No new CLI flags; both new `EphemeralEnvError` variants flow through the existing `CategorizedError`/`render_error` JSON and human paths unchanged. |
+| III. Dual-Primary Interface (Agent and Human) | No new CLI flags; both new `EphemeralEnvError` variants flow through the existing `CategorizedError`/`render_error` JSON and human paths unchanged. |
 | IV. DRY | Reuses the existing shared-client wiring point and extends, rather than duplicates, `redact_channel_url`. |
 | V. Explicit Over Implicit | Classification is a deterministic function of the operator's own `.condarc`, not a runtime auto-probe or a hardcoded guess. |
 | VI. Documentation and Type Safety | New public `condarc` field and new error variants carry doc comments; the new variants make "silently proceeding without required auth" unrepresentable. |
 | VII. No Hardcoded Values | Classification reads `channel_settings` directly; no duplicate host/channel list lives in `allez`. |
-| VIII. Spec Test Coverage | See data-model.md's coverage table; every FR and acceptance scenario has a planned test. |
+| VIII. Mandatory 100% Spec Test Coverage | See data-model.md's coverage table; every FR and acceptance scenario has a planned test. |
 | IX. Determinism & Idempotency | Classification is a pure function of resolved configuration; the token is read once per invocation, never cached across calls. |
-| X. Security & Supply-Chain | `astral-reqwest-middleware`/`async-trait` are both already compiled transitively at these exact versions; promoting them to direct dependencies changes no supply-chain exposure. |
+| X. Security & Supply-Chain Integrity | `astral-reqwest-middleware`/`async-trait` are both already compiled transitively at these exact versions; promoting them to direct dependencies changes no supply-chain exposure. |
 | XI. Structured Observability | New failure categories flow through the existing `tracing`-based `EphemeralLifecycleEvent`/`CategorizedError` machinery. |
-
-No violations requiring the Complexity Tracking table.
 
 ## Project Structure
 
@@ -56,7 +54,7 @@ specs/GEN-29_private_channel_auth/
 ├── quickstart.md
 ├── contracts/
 │   └── channel_auth_api.md
-└── tasks.md
+└── tasks.md              # Phase 2 output (/speckit.tasks command - NOT created by /speckit.plan)
 ```
 
 ### Source Code (repository root)
@@ -82,9 +80,11 @@ src/
     │                          # URL's query string and fragment.
     ├── channel_auth.rs         # NEW -- classification, token-header
     │                          # construction, ClientWithMiddleware assembly,
-    │                          # the Middleware impl, and
+    │                          # the Middleware impl,
     │                          # reqwest_http_failure/matching_private_channel/
-    │                          # origin_only.
+    │                          # origin_only, and the relocated
+    │                          # HTTP_USER_AGENT constant (moved from
+    │                          # solve.rs, its only remaining call site).
     ├── solve.rs                 # builds the client via
     │                            # channel_auth::build_channel_auth_client,
     │                            # maps gateway 401/403 to the new category
@@ -99,14 +99,21 @@ src/
                                    # MissingChannelToken, ChannelAuthenticationFailed.
 
 tests/
-├── ephemeral_env.rs          # extended with the private-channel-auth spec
-│                             # tests (uses wiremock for the scenarios that
-│                             # need a real HTTP server).
-└── support/ephemeral.rs      # extended with a wiremock-backed fixture helper.
+├── ephemeral_env.rs          # gains one new `#[path = ...] mod
+│                             # private_channel_auth;` declaration,
+│                             # matching its existing creation/defaults/
+│                             # failures submodule pattern (this file
+│                             # itself holds only `mod` declarations).
+├── support/
+│   ├── private_channel_auth.rs  # NEW -- the private-channel-auth spec
+│   │                             # tests (uses wiremock for the scenarios
+│   │                             # that need a real HTTP server).
+│   └── ephemeral.rs              # extended with a wiremock-backed
+│                                  # fixture helper.
 ```
 
 **Structure Decision**: single project, additive within the existing `allez`/`condarc` workspace layout, no new crate. The only cross-crate change is `condarc`: one new `ResolvedChannels` field passing through data it already parses, plus a derive addition on `ChannelSetting` to satisfy `ResolvedChannels`'s own existing `Eq` bound.
 
 ## Complexity Tracking
 
-*No Constitution Check violations — table intentionally empty.*
+> **Fill ONLY if Constitution Check has violations that must be justified**

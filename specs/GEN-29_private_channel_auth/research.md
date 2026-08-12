@@ -24,6 +24,7 @@ Dependency versions, confirmed via `cargo tree -i reqwest --workspace` against t
 |---|---|---|
 | `astral-reqwest-middleware` (package name) | `0.5.1` | `reqwest_middleware::{ClientBuilder, ClientWithMiddleware, Middleware, Next}` |
 | `async-trait` | `0.1.91` | `#[async_trait::async_trait]` on the `Middleware` impl |
+| `http` | `1.4.2` | `http::HeaderValue`, needed directly since `channel_auth.rs` constructs one — a crate may only reference a transitive dependency's items through a direct dependency's own re-export, not by naming the transitive crate itself |
 | `reqwest` | `0.13.4` | already a direct dependency, unchanged |
 
 `Cargo.toml` depends on the package under its published name, renamed to the import path it exposes:
@@ -31,6 +32,7 @@ Dependency versions, confirmed via `cargo tree -i reqwest --workspace` against t
 ```toml
 reqwest-middleware = { package = "astral-reqwest-middleware", version = "0.5.1" }
 async-trait = "0.1.91"
+http = "1.4.2"
 ```
 
 `docs.rs/astral-reqwest-middleware/0.5.1` confirms the crate's own root module is named `reqwest_middleware`, matching every code example `rattler`/`rattler_networking` themselves use internally.
@@ -63,7 +65,7 @@ String-matching an error's `Display` output for `"401"`/`"403"` is rejected: fra
 
 ## Decision 5 — Missing-token detection timing (FR-004)
 
-Checked once, synchronously, at the top of `solve_packages` in `solve.rs`, before any HTTP client is built: if Decision 1's classification finds at least one private channel among `config.channels`, and `ALLEZ_CHANNEL_TOKEN` is absent, empty, or not representable as an HTTP header value (`http::HeaderValue::from_str` rejects control characters and other non-header-safe byte sequences), return `Err(EphemeralEnvError::MissingChannelToken)` immediately — no network request is ever attempted. Treating a present-but-unusable value the same as absent keeps FR-004 to one error category rather than inventing a second one for a byte-encoding technicality; the operator's remediation is identical either way (set `ALLEZ_CHANNEL_TOKEN` to a usable value).
+Checked once, synchronously, at the top of `solve_packages` in `solve.rs`, before any network request is made: if Decision 1's classification finds at least one private channel among `config.channels`, and `ALLEZ_CHANNEL_TOKEN` is absent, empty, or not representable as an HTTP header value (`http::HeaderValue::from_str` rejects control characters and other non-header-safe byte sequences), return `Err(EphemeralEnvError::MissingChannelToken)` immediately — no network request is ever attempted. Treating a present-but-unusable value the same as absent keeps FR-004 to one error category rather than inventing a second one for a byte-encoding technicality; the operator's remediation is identical either way (set `ALLEZ_CHANNEL_TOKEN` to a usable value).
 
 FR-004's Independent Test requires the error for any request to the private channel, not only after an unauthenticated request happens to fail; checking eagerly, before building the gateway/client at all, satisfies "an empty value is treated the same as an unset one" (US2 Acceptance Scenario 2) and the unusable-value case in one place.
 
@@ -87,4 +89,5 @@ A dedicated unit test constructs a real `reqwest::Request` carrying the middlewa
 |---|---|---|---|
 | `astral-reqwest-middleware` (as `reqwest-middleware`) | 0.5.1 | direct, non-dev | Yes, transitive via `rattler_networking` |
 | `async-trait` | 0.1.91 | direct, non-dev | Yes, transitive via `astral-reqwest-middleware` |
+| `http` | 1.4.2 | direct, non-dev | Yes, transitive via `reqwest` |
 | `wiremock` | 0.6 | dev-only | No; the same version `astral-reqwest-middleware` itself dev-depends on at this `reqwest`/`http` stack |

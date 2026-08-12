@@ -31,6 +31,7 @@
 | Name | Value | Notes |
 |---|---|---|
 | `CHANNEL_TOKEN_ENV_VAR` | `"ALLEZ_CHANNEL_TOKEN"` | The single designated environment variable (FR-001), spelled once here and referenced by both the read site and every error message naming it (FR-004). |
+| `HTTP_USER_AGENT` | `concat!("allez/", env!("CARGO_PKG_VERSION"))` | Relocated here from `solve.rs`, its only remaining call site once `build_channel_auth_client` owns base-client construction. |
 
 ### Functions
 
@@ -77,7 +78,8 @@ fn read_channel_token_header() -> Option<http::HeaderValue>;
 
 /// Builds the one shared HTTP client both `solve.rs`'s `Gateway` and
 /// `install.rs`'s `Installer` use: the existing base `reqwest::Client`
-/// (`.no_proxy().user_agent(HTTP_USER_AGENT)`, unchanged), wrapped with
+/// (`.no_proxy().user_agent(HTTP_USER_AGENT)`, using this module's own
+/// relocated `HTTP_USER_AGENT` constant), wrapped with
 /// a `PrivateChannelAuthMiddleware` only when `private_channels` is
 /// non-empty. Returns `Err(EphemeralEnvError::MissingChannelToken)` when
 /// `private_channels` is non-empty and `read_channel_token_header()`
@@ -102,12 +104,14 @@ struct HttpFailure {
 fn reqwest_http_failure(error: &(dyn std::error::Error + 'static)) -> Option<HttpFailure>;
 
 /// Reduces `channel` (a `private_channels` entry) to its origin only —
-/// `scheme://host[:port]`, via `Url::parse(channel)?.origin().ascii_serialization()`
-/// — discarding the entry's own path entirely, not merely a failing
-/// request's rattler-appended subpath. Returns the fixed constant
-/// `"<unparseable channel>"`, never any part of `channel` itself, if
-/// parsing fails or yields an opaque origin (not expected in practice;
-/// every `private_channels` entry is itself a member of
+/// `scheme://host[:port]`, by parsing `channel` as a URL and taking
+/// `.origin()`, returning `.ascii_serialization()` only when that origin
+/// is a tuple origin (`Origin::is_tuple()`) — discarding the entry's own
+/// path entirely, not merely a failing request's rattler-appended
+/// subpath. Returns the fixed constant `"<unparseable channel>"`, never
+/// any part of `channel` itself and never `Origin::Opaque`'s own
+/// `"null"` serialization, if parsing fails or yields an opaque origin
+/// (not expected in practice; every `private_channels` entry is itself a member of
 /// `ResolvedChannels.channels` and already excludes no-host channels).
 /// Used to build `EphemeralEnvError::ChannelAuthenticationFailed`'s
 /// payload, giving that field an unconditional no-path-content
@@ -144,14 +148,15 @@ Every test that sets, empties, or unsets `ALLEZ_CHANNEL_TOKEN` runs under this w
 | Spec item | Test |
 |---|---|
 | FR-003 classification | Pure unit tests on `classify_private_channels`: an entry with `channel` exact-matching a configured channel and an `auth` key classifies private (regardless of the channel's URL scheme); an entry with `channel` matching but no `auth` key classifies public; an entry whose `channel` ends `/*` correctly matches `prefix/sub/path` but not `prefixed-differently`; a channel absent from `channel_settings` always classifies public regardless of its URL. |
+| FR-002/FR-005 request-URL membership | Pure unit tests on `matching_private_channel`: a private base URL matches its own repodata/package descendant paths (e.g. `/org/noarch/repodata.json`, `/org/pkg.tar.bz2`); it rejects a sibling prefix that merely shares a string prefix without the path-boundary (`/org` vs. `/organization/...`), a different scheme, a different host, and a different port. This predicate gates both header injection (FR-002) and 401/403 attribution (FR-005), so its boundary correctness is tested directly rather than only through the integration scenarios below. |
 | US1 Acceptance Scenario 1 | A `wiremock` server, configured as a channel with a matching `channel_settings`/`auth` entry, plus `ALLEZ_CHANNEL_TOKEN` set: asserts the server received an `Authorization` header equal to the raw environment value, and the package resolves and installs. |
 | US1 Acceptance Scenario 2 | Two `wiremock` servers, one with a matching `channel_settings`/`auth` entry and one without: asserts only the first's captured requests carry `Authorization`; the second's carry none. |
-| US2 Acceptance Scenario 1 and 2 | A private channel configured, `ALLEZ_CHANNEL_TOKEN` unset (Scenario 1) and set to an empty string (Scenario 2): both produce `Err(EphemeralEnvError::MissingChannelToken)`, and the mock server receives zero requests in either case. |
+| US2 Acceptance Scenario 1 and 2 | A private channel configured, `ALLEZ_CHANNEL_TOKEN` unset (Scenario 1) and set to an empty string (Scenario 2): both produce `Err(EphemeralEnvError::MissingChannelToken)`, and the mock server receives zero requests in either case. A unit test additionally sets `ALLEZ_CHANNEL_TOKEN` to a value `http::HeaderValue::from_str` rejects (for example, one containing a bare `\r` or `\n` byte), asserting `read_channel_token_header` returns `None` — covering FR-004's "not representable as an HTTP header value" case. |
 | US3 Acceptance Scenario 1 | Two real-stack cases against a `wiremock` server configured private: one scripted to reject the repodata request with 401 (then repeated with 403), asserting the error surfaces through the `solve.rs`/`GatewayError` path; a second scripted to serve valid repodata but reject the package download, asserting the error surfaces through the `install.rs`/`InstallerError::FailedToFetch` path. Both assert `Err(EphemeralEnvError::ChannelAuthenticationFailed { channel })` with `channel` equal to the private channel's origin, never `UnresolvablePackage`/`ResolutionFailed`. |
 | FR-005 correlation (negative case) | A `wiremock` server configured as a **public** channel (no matching `channel_settings` entry) scripted to reject a request with 401: asserts the failure stays `UnresolvablePackage`/`ResolutionFailed`, confirming a public channel's own 401 is never mislabeled `ChannelAuthenticationFailed`. |
 | Edge case: unmarked channel never private | A `wiremock` server with no `channel_settings` entry at all: asserts no `Authorization` header on any request, and no `MissingChannelToken` error even when `ALLEZ_CHANNEL_TOKEN` is unset. |
 | Edge case: redaction | A unit test asserting `format!("{request:?}")` on a request the middleware touched never contains the literal token; a unit test asserting `channel_auth::origin_only` returns only `scheme://host[:port]` for a channel URL that includes a path, query string, and fragment (confirming none of those reach `ChannelAuthenticationFailed`); a unit test asserting `origin_only` returns the fixed `"<unparseable channel>"` constant, never a substring of its input, for an unparseable or opaque-origin input; a unit test asserting the extended `redact_channel_url` strips a credential embedded in a query string or fragment from `UnresolvablePackage`/`IntegrityVerificationFailed`, not only userinfo/`/t/token/`; an end-to-end test capturing `RUST_LOG=allez=trace` stderr in both JSON and human formatter modes during a 401 rejection, asserting neither contains the token. |
-| FR-007 (no storage) | Enforced structurally by `channel_auth`'s own function signatures never returning or exposing the token beyond one call's return value; verified by code review of the module's public surface, not a runtime test. |
+| FR-007 (no storage) | Enforced structurally by `channel_auth`'s own function signatures never returning or exposing the token beyond one call's return value, verified by code review of the module's public surface; additionally covered by two runtime regression tests: a unit test confirming `read_channel_token_header` reflects the current environment value on every call (no internal caching across repeated calls in one process), and an integration test scanning every file under a successful install's environment root for the literal token value, asserting it appears nowhere on disk (no persistence). |
 
 ## Relationships
 

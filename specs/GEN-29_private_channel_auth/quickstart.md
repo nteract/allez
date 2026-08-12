@@ -5,7 +5,7 @@ This is a validation guide, not an implementation guide — see `data-model.md` 
 ## Prerequisites
 
 - Rust toolchain matching this workspace (`cargo --version`; edition 2024).
-- `cargo build --workspace` succeeds, confirming the new `astral-reqwest-middleware`/`async-trait`/`wiremock` dependencies resolve cleanly against the existing `Cargo.lock`.
+- `cargo build --workspace` succeeds, confirming the new `astral-reqwest-middleware`/`async-trait`/`http`/`wiremock` dependencies resolve cleanly against the existing `Cargo.lock`.
 
 ## Scenario 1 — Happy path (US1, FR-001/FR-002)
 
@@ -43,6 +43,7 @@ This is a validation guide, not an implementation guide — see `data-model.md` 
 1. Re-run Scenario 4.1's 401 case with `RUST_LOG=allez=trace` set, capturing stderr in both the default JSON log formatter and the `--human` formatter.
 2. Expect: neither capture contains the token value used in Scenario 1/4.
 3. The extended `redact_channel_url` strips a credential placed in a URL's query string or fragment, not only userinfo or `/t/token/`; a unit test asserts `format!("{request:?}")` on a request the middleware touched never contains the raw token.
+4. A unit test asserts `channel_auth::origin_only` reduces a channel URL carrying userinfo, a path, a query string, and a fragment to `scheme://host[:port]` only, so neither `ChannelAuthenticationFailed { channel }`'s `Display` nor its `Debug` output ever contains anything beyond that origin.
 
 ## Success criteria recap
 

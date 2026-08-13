@@ -1,17 +1,99 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     env,
+    ffi::OsString,
     path::PathBuf,
     sync::{Arc, Mutex, OnceLock},
 };
 
 use allez::ephemeral::{PackageSpec, ReadyEnvironment, RequestedPackages};
-use condarc::{ChannelPriority, ResolvedChannels};
+use condarc::{ChannelPriority, ChannelSetting, ResolvedChannels};
 use rattler_conda_types::Channel;
 use tracing::{Event, Subscriber, field::Visit};
 use tracing_subscriber::{Layer, layer::Context, prelude::*, registry::LookupSpan};
+use wiremock::MockServer;
 
 static EVENT_CAPTURE: OnceLock<EventCapture> = OnceLock::new();
+const CHANNEL_TOKEN_ENV_VAR: &str = "ALLEZ_CHANNEL_TOKEN";
+
+/// A private channel mock server paired with its matching configuration entry.
+pub(crate) struct PrivateChannelFixture {
+    /// The HTTP server used by private-channel integration tests.
+    pub(crate) mock_server: MockServer,
+    /// The private channel URL served by [`Self::mock_server`].
+    pub(crate) channel: String,
+    /// The `channel_settings` entry that marks [`Self::channel`] private.
+    pub(crate) channel_setting: ChannelSetting,
+    _token_guard: ChannelTokenGuard,
+}
+
+impl PrivateChannelFixture {
+    /// Starts a private channel mock server and sets its token for this test scope.
+    pub(crate) async fn new(token: &str) -> Self {
+        let mock_server = MockServer::start().await;
+        let channel = mock_server.uri();
+        let channel_setting = ChannelSetting(BTreeMap::from([
+            ("channel".to_string(), channel.clone()),
+            ("auth".to_string(), "token".to_string()),
+        ]));
+
+        Self {
+            mock_server,
+            channel,
+            channel_setting,
+            _token_guard: ChannelTokenGuard::set(token),
+        }
+    }
+}
+
+/// Restores `ALLEZ_CHANNEL_TOKEN` when a serialized test finishes.
+pub(crate) struct ChannelTokenGuard {
+    prior_value: Option<OsString>,
+}
+
+impl ChannelTokenGuard {
+    /// Sets `ALLEZ_CHANNEL_TOKEN` until this guard is dropped.
+    pub(crate) fn set(value: &str) -> Self {
+        let prior_value = env::var_os(CHANNEL_TOKEN_ENV_VAR);
+
+        // SAFETY: Category 13, library contract. Callers hold serial_test's
+        // process-wide lock, so no other test can access the process environment
+        // while this mutation runs.
+        unsafe {
+            env::set_var(CHANNEL_TOKEN_ENV_VAR, value);
+        }
+
+        Self { prior_value }
+    }
+
+    /// Unsets `ALLEZ_CHANNEL_TOKEN` until this guard is dropped.
+    pub(crate) fn unset() -> Self {
+        let prior_value = env::var_os(CHANNEL_TOKEN_ENV_VAR);
+
+        // SAFETY: Category 13, library contract. Callers hold serial_test's
+        // process-wide lock, so no other test can access the process environment
+        // while this mutation runs.
+        unsafe {
+            env::remove_var(CHANNEL_TOKEN_ENV_VAR);
+        }
+
+        Self { prior_value }
+    }
+}
+
+impl Drop for ChannelTokenGuard {
+    fn drop(&mut self) {
+        // SAFETY: Category 13, library contract. Callers hold serial_test's
+        // process-wide lock, so no other test can access the process environment
+        // while this mutation runs.
+        unsafe {
+            match &self.prior_value {
+                Some(value) => env::set_var(CHANNEL_TOKEN_ENV_VAR, value),
+                None => env::remove_var(CHANNEL_TOKEN_ENV_VAR),
+            }
+        }
+    }
+}
 
 pub(crate) struct TestContext {
     _temporary_directory: tempfile::TempDir,
@@ -143,6 +225,30 @@ where
             self.0.lock().unwrap().events.push(visitor.event);
         }
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[serial_test::serial]
+async fn private_channel_fixture_builds_matching_setting_and_restores_token() {
+    // Given
+    let _original_token_guard = ChannelTokenGuard::set("existing-token");
+
+    // When
+    let fixture = PrivateChannelFixture::new("fixture-token").await;
+
+    // Then
+    assert_eq!(env::var(CHANNEL_TOKEN_ENV_VAR).unwrap(), "fixture-token");
+    assert_eq!(fixture.channel, fixture.mock_server.uri());
+    assert_eq!(
+        fixture.channel_setting,
+        ChannelSetting(BTreeMap::from([
+            ("channel".to_string(), fixture.channel.clone()),
+            ("auth".to_string(), "token".to_string()),
+        ]))
+    );
+
+    drop(fixture);
+    assert_eq!(env::var(CHANNEL_TOKEN_ENV_VAR).unwrap(), "existing-token");
 }
 
 #[derive(Default)]

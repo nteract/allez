@@ -8,21 +8,13 @@ use rattler_repodata_gateway::Gateway;
 use rattler_solve::{ChannelPriority, SolverImpl, SolverTask, resolvo::Solver};
 use rattler_virtual_packages::{Override, VirtualPackageOverrides, VirtualPackages};
 
-use super::{defaults::PackageSpec, error::EphemeralEnvError, paths::VerifiedRoot};
-
-/// A stable `User-Agent`, distinct from `reqwest`'s own default of sending
-/// none at all: `repo.anaconda.com`'s CDN has been observed rejecting
-/// requests carrying no `User-Agent` header with an HTTP 403 (confirmed
-/// empirically), even though the exact same request with any identifying
-/// `User-Agent` succeeds. Every HTTP request this feature makes -- both
-/// repodata queries here and package downloads in `install.rs`, which reuses
-/// this same client -- goes through this one client, so setting it once
-/// here covers both.
-const HTTP_USER_AGENT: &str = concat!("allez/", env!("CARGO_PKG_VERSION"));
+use super::{channel_auth, defaults::PackageSpec, error::EphemeralEnvError, paths::VerifiedRoot};
 
 pub(crate) struct SolvedPackages {
     pub(crate) records: Vec<RepoDataRecord>,
-    pub(crate) client: reqwest::Client,
+    pub(crate) client: reqwest_middleware::ClientWithMiddleware,
+    /// Private channel URLs classified for this solution.
+    pub(crate) private_channels: Vec<String>,
 }
 
 pub(crate) async fn solve_packages(
@@ -34,11 +26,9 @@ pub(crate) async fn solve_packages(
         return Err(EphemeralEnvError::NoChannelsConfigured);
     }
 
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .user_agent(HTTP_USER_AGENT)
-        .build()
-        .map_err(|_| EphemeralEnvError::ResolutionFailed)?;
+    let private_channels =
+        channel_auth::classify_private_channels(&config.channels, &config.channel_settings);
+    let client = channel_auth::build_channel_auth_client(private_channels.clone())?;
     let channel_config = RattlerChannelConfig::default_with_root_dir(root.path().to_path_buf());
     let sources = config
         .channels
@@ -69,7 +59,11 @@ pub(crate) async fn solve_packages(
         .recursive(true)
         .execute()
         .await
-        .map_err(|_| EphemeralEnvError::ResolutionFailed)?;
+        .map_err(|error| {
+            let http_failure = channel_auth::gateway_http_failure(&error);
+            channel_auth::channel_authentication_failure(http_failure, &private_channels)
+                .unwrap_or(EphemeralEnvError::ResolutionFailed)
+        })?;
 
     let mut task: SolverTask<_> = repodata.iter().map(|data| data.iter()).collect();
     task.channel_priority = solver_priority(config.channel_priority);
@@ -103,6 +97,7 @@ pub(crate) async fn solve_packages(
     Ok(SolvedPackages {
         records: result.records,
         client,
+        private_channels,
     })
 }
 

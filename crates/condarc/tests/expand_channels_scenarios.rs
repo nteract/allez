@@ -1,4 +1,6 @@
-use condarc::{ChannelPriority, Config, ExpandChannelsError, ResolvedChannels};
+use std::collections::BTreeMap;
+
+use condarc::{ChannelPriority, ChannelSetting, Config, ExpandChannelsError, ResolvedChannels};
 
 #[cfg(not(windows))]
 const BUILTIN_DEFAULT_CHANNELS: &[&str] = &[
@@ -394,7 +396,8 @@ custom_multichannels:
 }
 
 #[test]
-fn channel_settings_never_appear_in_resolved_channels() {
+fn channel_settings_pass_through_without_affecting_resolved_channels() {
+    // Given
     let resolved = resolve(
         r#"
 channels: [alpha]
@@ -404,9 +407,20 @@ channel_settings:
 "#,
     );
 
+    // Then
     assert_eq!(
         resolved.channels,
         strings(&["https://conda.anaconda.org/alpha"])
+    );
+    assert_eq!(
+        resolved.channel_settings,
+        vec![ChannelSetting(BTreeMap::from([
+            (
+                "channel".to_string(),
+                "https://private.example.org".to_string(),
+            ),
+            ("auth".to_string(), "secret".to_string()),
+        ]))]
     );
 }
 

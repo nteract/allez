@@ -14,6 +14,7 @@ use std::time::Instant;
 
 use crate::error::CategorizedError;
 
+mod channel_auth;
 mod channels;
 mod cleanup;
 mod defaults;

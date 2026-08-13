@@ -329,7 +329,7 @@ pub enum ListField {
 /// `channel` key is a documentation convention (settings.rst), **not**
 /// source-enforced by any `context.py` validation callable (research §6),
 /// so it is not required at parse time.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ChannelSetting(pub BTreeMap<String, String>);
 
 /// Runtime options for [`crate::parse_with_options`]. `ParseOptions::default()`

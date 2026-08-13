@@ -25,7 +25,7 @@ This is a validation guide, not an implementation guide — see `data-model.md` 
 
 1. Same configuration as Scenario 1, with `unset ALLEZ_CHANNEL_TOKEN`, then a second run with `export ALLEZ_CHANNEL_TOKEN=""`.
 2. Expect: `create_ephemeral_environment` returns `Err(CreationFailure { error: EphemeralEnvError::MissingChannelToken, .. })` in both runs, and `PRIVATE` records zero requests, proving the check happens before any network call.
-3. Run the equivalent through `allez oneshot --json <fixture-package>` and confirm the JSON error body's `category` is `"missing_channel_token"`, its `message` names `ALLEZ_CHANNEL_TOKEN`, and the exit code is `2`, matching every other rendered error.
+3. Run the equivalent through `allez oneshot --json <fixture-package>` and confirm the JSON error body's `category` is `"missing_channel_token"`, its `message` names `ALLEZ_CHANNEL_TOKEN`, and the exit code is `1`, matching every other rendered `EphemeralEnvError::CreationFailure` (per `contracts/channel_auth_api.md`'s Error contract: this feature introduces no new exit code).
 
 ## Scenario 4 — Channel-side auth rejection, both HTTP phases, correctly attributed (US3, FR-005)
 

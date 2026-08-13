@@ -41,6 +41,29 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 # `rustix::fs::mkdirat` directly for handle-anchored directory creation and
 # `rustix::process::geteuid()` for current-user ownership checks.
 rustix = { version = "1", features = ["fs", "process"] }
+# GEN-29 (private channel authentication): custom `reqwest_middleware`
+# header-injection layer -- see specs/GEN-29_private_channel_auth/research.md
+# Decision 2. All three already resolve transitively at these exact
+# versions (via `rattler_networking`/`astral-reqwest-middleware`/`reqwest`
+# respectively), so promoting them to direct dependencies changes no
+# supply-chain exposure.
+reqwest-middleware = { package = "astral-reqwest-middleware", version = "0.5.1" }
+async-trait = "0.1.91"
+http = "1.4.2"
+# GEN-29 (research.md Decision 4): `install.rs`'s package-download 401/403
+# attribution needs `ExtractError::ReqwestError`, since `PackageCacheError`/
+# `PackageCacheLayerError`'s own `#[error(transparent)]` variants make
+# `Error::source()` skip past the boxed/`Arc`'d `ExtractError` value itself
+# (transparent delegates straight to *its* source, not the value) -- the
+# only way to reach it is a direct downcast, which requires this crate as a
+# direct dependency (same "transitive item, direct-dependency-only access"
+# rule as `http` above). Already resolves transitively at this exact
+# version via `rattler_cache`/`rattler`, so this changes no supply-chain
+# exposure; the `reqwest` feature is already active transitively (rattler's
+# own HTTP package downloads depend on it) and is enabled explicitly here
+# only so this crate's own feature-unification doesn't rely on that by
+# accident.
+rattler_package_streaming = { version = "0.26.9", features = ["reqwest"] }
 [target.'cfg(windows)'.dependencies]
 # "Win32_System_Threading": `permissions.rs`'s owner-only verification of a
 # *reused* root/cache directory needs `GetCurrentProcess`/`OpenProcessToken`
@@ -106,3 +129,8 @@ predicates = "3.1.4"
 rstest = "0.26.1"
 serial_test = "3"
 tempfile = "3.14.0"
+# GEN-29: a real HTTP server for the scenarios that need one (header
+# transmission, zero-request assertions, 401/403 propagation) -- the same
+# version `astral-reqwest-middleware` itself dev-depends on at this
+# `reqwest`/`http` stack.
+wiremock = "0.6"

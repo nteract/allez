@@ -1,5 +1,8 @@
-/// Removes URL userinfo and `/t/<token>/` conda token path segments.
+/// Removes URL userinfo, `/t/<token>/` path segments, queries, and fragments.
 pub fn redact_channel_url(value: &str) -> String {
+    let value = value
+        .find(['?', '#'])
+        .map_or(value, |credential_start| &value[..credential_start]);
     let (authority_start, scheme_less) = value
         .find("://")
         .map_or((0, true), |scheme_end| (scheme_end + 3, false));
@@ -51,6 +54,18 @@ mod tests {
             redact_channel_url("https://repo.example/conda-forge"),
             "https://repo.example/conda-forge"
         );
+    }
+
+    #[test]
+    fn redact_channel_url_removes_query_and_fragment_credentials() {
+        // Given
+        let url = "https://repo.example/conda-forge?token=query-token#token=fragment-token";
+
+        // When
+        let redacted = redact_channel_url(url);
+
+        // Then
+        assert_eq!(redacted, "https://repo.example/conda-forge");
     }
 
     #[test]

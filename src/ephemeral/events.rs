@@ -5,7 +5,7 @@ use std::fmt;
 use super::{channels::redact_channel_url, lifecycle::EnvironmentId};
 
 /// Version of the structured ephemeral lifecycle event schema.
-pub const EPHEMERAL_EVENT_SCHEMA_VERSION: &str = "1";
+pub const EPHEMERAL_EVENT_SCHEMA_VERSION: &str = "2";
 
 /// Structured observability data for one ephemeral environment lifecycle step.
 #[derive(Clone)]
@@ -16,7 +16,11 @@ pub struct EphemeralLifecycleEvent {
     pub environment_id: EnvironmentId,
     /// Lifecycle operation: `create`, `install`, or `teardown`.
     pub operation: &'static str,
-    /// Effective top-level package specifications.
+    /// Safe labels for the effective top-level packages: a parsed package
+    /// name for a caller-named package, or a positional reference for a
+    /// `.condarc` `create_default_packages` entry. Deliberately not the raw
+    /// specifications, which can embed credentials this crate never
+    /// validated. Schema version 2 narrowed this field from full specs.
     pub packages: Vec<String>,
     /// Operation duration in milliseconds.
     pub duration_ms: u64,

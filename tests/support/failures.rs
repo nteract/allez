@@ -1,7 +1,7 @@
 use allez::ephemeral::{EphemeralEnvError, create_ephemeral_environment};
 use condarc::{ChannelPriority, ResolvedChannels};
 
-use crate::support::{TestContext, fixture_channel, package_specs, root_fixture_config};
+use crate::support::{TestContext, explicit_only, fixture_channel, root_fixture_config};
 
 #[tokio::test(flavor = "current_thread")]
 #[serial_test::serial]
@@ -11,9 +11,8 @@ async fn unresolvable_package_returns_failure_without_a_partial_directory() {
 
     // When
     let failure = create_ephemeral_environment(
-        package_specs(&["fixture-does-not-exist"]),
+        explicit_only(&["fixture-does-not-exist"]),
         root_fixture_config(ChannelPriority::Strict),
-        None,
     )
     .await
     .unwrap_err();
@@ -39,13 +38,10 @@ async fn deny_filtered_channel_list_returns_no_channels() {
     assert!(deny_filtered_config.channels.is_empty());
 
     // When
-    let failure = create_ephemeral_environment(
-        package_specs(&["fixture-probe"]),
-        deny_filtered_config,
-        None,
-    )
-    .await
-    .unwrap_err();
+    let failure =
+        create_ephemeral_environment(explicit_only(&["fixture-probe"]), deny_filtered_config)
+            .await
+            .unwrap_err();
 
     // Then
     assert_eq!(failure.error, EphemeralEnvError::NoChannelsConfigured);
@@ -66,13 +62,10 @@ async fn allow_filtered_channel_list_returns_no_channels() {
     assert!(allow_filtered_config.channels.is_empty());
 
     // When
-    let failure = create_ephemeral_environment(
-        package_specs(&["fixture-probe"]),
-        allow_filtered_config,
-        None,
-    )
-    .await
-    .unwrap_err();
+    let failure =
+        create_ephemeral_environment(explicit_only(&["fixture-probe"]), allow_filtered_config)
+            .await
+            .unwrap_err();
 
     // Then
     assert_eq!(failure.error, EphemeralEnvError::NoChannelsConfigured);
@@ -87,9 +80,8 @@ async fn corrupt_checksum_returns_integrity_failure_without_a_partial_directory(
 
     // When
     let failure = create_ephemeral_environment(
-        package_specs(&["fixture-corrupt-checksum"]),
+        explicit_only(&["fixture-corrupt-checksum"]),
         root_fixture_config(ChannelPriority::Strict),
-        None,
     )
     .await
     .unwrap_err();
@@ -113,7 +105,7 @@ async fn empty_resolved_channels_return_no_channels_without_network() {
     let config = ResolvedChannels::from_channels(Vec::new());
 
     // When
-    let failure = create_ephemeral_environment(package_specs(&["fixture-probe"]), config, None)
+    let failure = create_ephemeral_environment(explicit_only(&["fixture-probe"]), config)
         .await
         .unwrap_err();
 
@@ -143,9 +135,8 @@ async fn root_resolution_failure_does_not_attempt_cleanup() {
 
     // When
     let failure = create_ephemeral_environment(
-        package_specs(&["fixture-probe"]),
+        explicit_only(&["fixture-probe"]),
         root_fixture_config(ChannelPriority::Strict),
-        None,
     )
     .await
     .unwrap_err();

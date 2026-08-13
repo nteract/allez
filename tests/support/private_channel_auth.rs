@@ -8,7 +8,7 @@ use condarc::ResolvedChannels;
 use wiremock::{Mock, MockServer, ResponseTemplate, matchers::path};
 
 use crate::support::{
-    ChannelTokenGuard, PrivateChannelFixture, TestContext, installed_names, package_specs,
+    ChannelTokenGuard, PrivateChannelFixture, TestContext, explicit_only, installed_names,
 };
 
 const CHANNEL_SUBDIRECTORIES: &[&str] = &[
@@ -107,9 +107,8 @@ async fn private_channel_requests_use_the_raw_token_and_install_the_package() {
 
     // When
     let ready = create_ephemeral_environment(
-        package_specs(&["fixture-default-alpha"]),
+        explicit_only(&["fixture-default-alpha"]),
         config_for_private_channel(&fixture),
-        None,
     )
     .await
     .unwrap();
@@ -140,10 +139,9 @@ async fn private_channel_requests_are_authenticated_while_public_channel_request
     config.channel_settings = vec![fixture.channel_setting.clone()];
 
     // When
-    let ready =
-        create_ephemeral_environment(package_specs(&["fixture-default-alpha"]), config, None)
-            .await
-            .unwrap();
+    let ready = create_ephemeral_environment(explicit_only(&["fixture-default-alpha"]), config)
+        .await
+        .unwrap();
     let private_requests = fixture.mock_server.received_requests().await.unwrap();
     let public_requests = public_server.received_requests().await.unwrap();
 
@@ -174,10 +172,9 @@ async fn unmarked_channel_installs_without_a_token_or_authorization_header() {
     let config = ResolvedChannels::from_channels(vec![public_server.uri()]);
 
     // When
-    let ready =
-        create_ephemeral_environment(package_specs(&["fixture-default-alpha"]), config, None)
-            .await
-            .unwrap();
+    let ready = create_ephemeral_environment(explicit_only(&["fixture-default-alpha"]), config)
+        .await
+        .unwrap();
     let requests = public_server.received_requests().await.unwrap();
 
     // Then
@@ -201,9 +198,8 @@ async fn private_channel_without_a_token_fails_before_making_a_request() {
 
     // When
     let failure = create_ephemeral_environment(
-        package_specs(&["fixture-default-alpha"]),
+        explicit_only(&["fixture-default-alpha"]),
         config_for_private_channel(&fixture),
-        None,
     )
     .await
     .unwrap_err();
@@ -225,9 +221,8 @@ async fn private_channel_with_an_empty_token_fails_before_making_a_request() {
 
     // When
     let failure = create_ephemeral_environment(
-        package_specs(&["fixture-default-alpha"]),
+        explicit_only(&["fixture-default-alpha"]),
         config_for_private_channel(&fixture),
-        None,
     )
     .await
     .unwrap_err();
@@ -248,9 +243,8 @@ async fn private_channel_repodata_401_is_an_authentication_failure() {
 
     // When
     let failure = create_ephemeral_environment(
-        package_specs(&["fixture-default-alpha"]),
+        explicit_only(&["fixture-default-alpha"]),
         config_for_private_channel(&fixture),
-        None,
     )
     .await
     .unwrap_err();
@@ -274,9 +268,8 @@ async fn private_channel_repodata_403_is_an_authentication_failure() {
 
     // When
     let failure = create_ephemeral_environment(
-        package_specs(&["fixture-default-alpha"]),
+        explicit_only(&["fixture-default-alpha"]),
         config_for_private_channel(&fixture),
-        None,
     )
     .await
     .unwrap_err();
@@ -301,10 +294,9 @@ async fn public_channel_repodata_401_is_not_an_authentication_failure() {
     let config = ResolvedChannels::from_channels(vec![public_server.uri()]);
 
     // When
-    let failure =
-        create_ephemeral_environment(package_specs(&["fixture-default-alpha"]), config, None)
-            .await
-            .unwrap_err();
+    let failure = create_ephemeral_environment(explicit_only(&["fixture-default-alpha"]), config)
+        .await
+        .unwrap_err();
 
     // Then
     assert!(matches!(
@@ -324,10 +316,9 @@ async fn public_channel_repodata_403_is_not_an_authentication_failure() {
     let config = ResolvedChannels::from_channels(vec![public_server.uri()]);
 
     // When
-    let failure =
-        create_ephemeral_environment(package_specs(&["fixture-default-alpha"]), config, None)
-            .await
-            .unwrap_err();
+    let failure = create_ephemeral_environment(explicit_only(&["fixture-default-alpha"]), config)
+        .await
+        .unwrap_err();
 
     // Then
     assert!(matches!(
@@ -347,9 +338,8 @@ async fn private_channel_package_download_401_is_an_authentication_failure() {
 
     // When
     let failure = create_ephemeral_environment(
-        package_specs(&["fixture-default-alpha"]),
+        explicit_only(&["fixture-default-alpha"]),
         config_for_private_channel(&fixture),
-        None,
     )
     .await
     .unwrap_err();
@@ -374,9 +364,8 @@ async fn successful_private_channel_install_never_persists_the_token() {
 
     // When
     let ready = create_ephemeral_environment(
-        package_specs(&["fixture-default-alpha"]),
+        explicit_only(&["fixture-default-alpha"]),
         config_for_private_channel(&fixture),
-        None,
     )
     .await
     .unwrap();

@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use crate::model::{ChannelPriority, Config};
+use crate::model::{ChannelPriority, ChannelSetting, Config};
 use crate::scheme::has_scheme;
 
 const DEFAULT_CHANNEL_ALIAS: &str = "https://conda.anaconda.org";
@@ -41,6 +41,8 @@ pub struct ResolvedChannels {
     /// boolean-spelling mapping — that already happened at `parse()` time
     /// (research.md R2).
     pub channel_priority: ChannelPriority,
+    /// Direct pass-through of [`Config::channel_settings`] with no interpretation.
+    pub channel_settings: Vec<ChannelSetting>,
     /// Maps each *named* channel entry the caller configured (a
     /// `custom_channels` name, a `custom_multichannels` name, `defaults`,
     /// or a bare name joined to `channel_alias`) to the concrete channel
@@ -74,6 +76,7 @@ impl ResolvedChannels {
         Self {
             channels,
             channel_priority: ChannelPriority::Strict,
+            channel_settings: Vec::new(),
             channel_urls_by_name: BTreeMap::new(),
         }
     }
@@ -288,6 +291,7 @@ pub fn expand_channels(config: &Config) -> Result<ResolvedChannels, ExpandChanne
     Ok(ResolvedChannels {
         channels,
         channel_priority: config.channel_priority.unwrap_or(ChannelPriority::Flexible),
+        channel_settings: config.channel_settings.clone().unwrap_or_default(),
         channel_urls_by_name,
     })
 }
@@ -570,6 +574,29 @@ mod tests {
             resolved.channels,
             strings(&["https://internal.example.com/acme"])
         );
+    }
+
+    #[test]
+    fn expand_channels_preserves_channel_settings_unchanged() {
+        // Given
+        let channel_settings = vec![crate::ChannelSetting(BTreeMap::from([
+            (
+                "channel".to_string(),
+                "https://repo.example.org/private".to_string(),
+            ),
+            ("auth".to_string(), "token".to_string()),
+        ]))];
+        let config = Config {
+            channels: Some(strings(&["https://repo.example.org/private"])),
+            channel_settings: Some(channel_settings.clone()),
+            ..Config::default()
+        };
+
+        // When
+        let resolved = expand_channels(&config).unwrap();
+
+        // Then
+        assert_eq!(resolved.channel_settings, channel_settings);
     }
 
     #[test]

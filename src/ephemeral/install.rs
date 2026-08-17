@@ -12,8 +12,8 @@ use rattler_cache::package_cache::PackageCache;
 use rattler_conda_types::RepoDataRecord;
 
 use super::{
-    channels::redact_channel_url, error::EphemeralEnvError, lifecycle::InstalledPackage,
-    paths::VerifiedRoot, solve::SolvedPackages,
+    channel_auth, channels::redact_channel_url, error::EphemeralEnvError,
+    lifecycle::InstalledPackage, paths::VerifiedRoot, solve::SolvedPackages,
 };
 
 pub(crate) async fn install_packages(
@@ -21,7 +21,12 @@ pub(crate) async fn install_packages(
     prefix: &Path,
     solution: SolvedPackages,
 ) -> Result<Vec<InstalledPackage>, EphemeralEnvError> {
-    let records = validate_file_records(solution.records, validate_file_record).await?;
+    let SolvedPackages {
+        records,
+        client,
+        private_channels,
+    } = solution;
+    let records = validate_file_records(records, validate_file_record).await?;
     let installed_packages = records
         .iter()
         .map(|record| InstalledPackage {
@@ -45,7 +50,7 @@ pub(crate) async fn install_packages(
         .collect::<Vec<_>>();
     let installer = Installer::new()
         .with_package_cache(PackageCache::new(root.path().join("cache/packages")))
-        .with_download_client(solution.client)
+        .with_download_client(client)
         .with_execute_link_scripts(true)
         .with_link_options(LinkOptions {
             allow_hard_links: Some(false),
@@ -57,6 +62,14 @@ pub(crate) async fn install_packages(
         .await
         .map_err(|error| match error {
             InstallerError::FailedToFetch(identifier, source) => {
+                let http_failure = channel_auth::reqwest_http_failure(&source)
+                    .or_else(|| channel_auth::package_cache_http_failure(&source));
+                if let Some(error) =
+                    channel_auth::channel_authentication_failure(http_failure, &private_channels)
+                {
+                    return error;
+                }
+
                 let mut cause = source.source();
                 let mut integrity_failure = false;
                 while let Some(error) = cause {

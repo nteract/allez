@@ -4,6 +4,7 @@ use std::fmt;
 
 use crate::error::CategorizedError;
 
+use super::channel_auth::origin_only;
 use super::channels::redact_channel_url;
 
 /// The fixed category set for ephemeral environment failures.
@@ -27,6 +28,15 @@ pub enum EphemeralEnvError {
     },
     /// Resolution failed without identifying one specific requested package.
     ResolutionFailed,
+    /// A configured private channel requires a usable `ALLEZ_CHANNEL_TOKEN`.
+    MissingChannelToken,
+    /// A private channel rejected the credential supplied for its origin.
+    ChannelAuthenticationFailed {
+        /// The private channel that rejected the credential. `Display`/
+        /// `Debug` reduce this to its origin (`origin_only`) defensively,
+        /// regardless of what this field itself holds.
+        channel: String,
+    },
     /// A `<channel>::<package>` qualifier names more than one configured
     /// channel, which one match spec cannot express. Reported rather than
     /// guessed at, so no package is installed from an unintended member.
@@ -63,6 +73,11 @@ impl fmt::Debug for EphemeralEnvError {
                 .field("package", &redact_channel_url(package))
                 .finish(),
             Self::ResolutionFailed => formatter.write_str("ResolutionFailed"),
+            Self::MissingChannelToken => formatter.write_str("MissingChannelToken"),
+            Self::ChannelAuthenticationFailed { channel } => formatter
+                .debug_struct("ChannelAuthenticationFailed")
+                .field("channel", &origin_only(channel))
+                .finish(),
             Self::AmbiguousChannelQualifier { qualifier } => formatter
                 .debug_struct("AmbiguousChannelQualifier")
                 .field("qualifier", &redact_channel_url(qualifier))
@@ -87,6 +102,8 @@ impl CategorizedError for EphemeralEnvError {
             | Self::UnresolvableDefaultPackages
             | Self::AmbiguousChannelQualifier { .. }
             | Self::ResolutionFailed => "unresolvable_package",
+            Self::MissingChannelToken => "missing_channel_token",
+            Self::ChannelAuthenticationFailed { .. } => "channel_authentication_failed",
             Self::IntegrityVerificationFailed { .. } => "integrity_verification_failed",
             Self::UnwritableLocation => "unwritable_location",
             Self::TeardownFailed => "teardown_failed",
@@ -113,6 +130,15 @@ impl fmt::Display for EphemeralEnvError {
                 )
             }
             Self::ResolutionFailed => write!(formatter, "could not resolve requested packages"),
+            Self::MissingChannelToken => write!(
+                formatter,
+                "environment variable `ALLEZ_CHANNEL_TOKEN` is required for a configured private channel but is unset, empty, or not a usable value"
+            ),
+            Self::ChannelAuthenticationFailed { channel } => write!(
+                formatter,
+                "channel `{}` rejected the provided credential (HTTP 401 or 403)",
+                origin_only(channel)
+            ),
             Self::AmbiguousChannelQualifier { qualifier } => write!(
                 formatter,
                 "channel `{}` names more than one channel; qualify with a single channel URL instead",
@@ -241,11 +267,53 @@ mod tests {
             ),
             (EphemeralEnvError::UnwritableLocation, "unwritable_location"),
             (EphemeralEnvError::TeardownFailed, "teardown_failed"),
+            (
+                EphemeralEnvError::MissingChannelToken,
+                "missing_channel_token",
+            ),
+            (
+                EphemeralEnvError::ChannelAuthenticationFailed {
+                    channel: "https://repo.example".to_string(),
+                },
+                "channel_authentication_failed",
+            ),
         ];
 
         for (error, category) in cases {
             assert_eq!(CategorizedError::category(&error), category);
         }
+    }
+
+    #[test]
+    fn missing_channel_token_display_matches_the_contract() {
+        // Given
+        let error = EphemeralEnvError::MissingChannelToken;
+
+        // When
+        let display = error.to_string();
+
+        // Then
+        assert_eq!(
+            display,
+            "environment variable `ALLEZ_CHANNEL_TOKEN` is required for a configured private channel but is unset, empty, or not a usable value"
+        );
+    }
+
+    #[test]
+    fn channel_authentication_failed_display_matches_the_contract() {
+        // Given
+        let error = EphemeralEnvError::ChannelAuthenticationFailed {
+            channel: "https://repo.example".to_string(),
+        };
+
+        // When
+        let display = error.to_string();
+
+        // Then
+        assert_eq!(
+            display,
+            "channel `https://repo.example` rejected the provided credential (HTTP 401 or 403)"
+        );
     }
 
     #[test]

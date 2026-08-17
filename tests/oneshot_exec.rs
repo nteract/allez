@@ -835,6 +835,45 @@ fn scenario_2_5_terminated_by_signal_category_appears_only_via_rust_log() {
 // User Story 3 — distinct environment-vs-command failure
 // ---------------------------------------------------------------------
 
+/// Scenario 6 (FR-006): a private channel's 401 rejection never leaks the
+/// raw token through `RUST_LOG=allez=trace` stderr, in either the default
+/// JSON log formatter or the `--human` formatter.
+#[test]
+fn scenario_6_private_channel_401_rejection_never_logs_the_token_in_either_formatter() {
+    let token = "trace-redaction-token-value";
+    let mock_server = tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let mock_server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::any())
+            .respond_with(wiremock::ResponseTemplate::new(401))
+            .mount(&mock_server)
+            .await;
+        mock_server
+    });
+    let channel = mock_server.uri();
+    let harness = OneshotHarness::with_condarc_contents(&format!(
+        "channels: [\"{channel}\"]\nchannel_settings:\n  - channel: \"{channel}\"\n    auth: \"token\"\n"
+    ));
+
+    for human in [false, true] {
+        let mut args = vec!["oneshot", "fixture-default-alpha", "--", "echo", "hi"];
+        if human {
+            args.insert(0, "--human");
+        }
+        let output = harness
+            .command()
+            .env("RUST_LOG", "allez=trace")
+            .env("ALLEZ_CHANNEL_TOKEN", token)
+            .args(&args)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !stderr.contains(token),
+            "human={human} leaked the token: stderr={stderr}"
+        );
+    }
+}
+
 /// Scenario 3.1: an unresolvable package fails before the command starts.
 #[test]
 fn scenario_3_1_unresolvable_package_fails_before_command_starts() {
@@ -845,6 +884,35 @@ fn scenario_3_1_unresolvable_package_fails_before_command_starts() {
     let body = parse_stderr_json(&stderr);
     assert_eq!(body["category"], "unresolvable_package");
     assert!(!stdout.contains("hi"));
+}
+
+#[test]
+fn private_channel_without_a_token_reports_a_json_configuration_error() {
+    // Given
+    let channel = support::fixture_channel("");
+    let harness = OneshotHarness::with_condarc_contents(&format!(
+        "channels: [\"{channel}\"]\nchannel_settings:\n  - channel: \"{channel}\"\n    auth: \"token\"\n"
+    ));
+
+    // When
+    let output = harness
+        .command()
+        .env_remove("ALLEZ_CHANNEL_TOKEN")
+        .args(["oneshot", "fixture-default-alpha", "--", "echo", "hi"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let body = parse_stderr_json(&stderr);
+
+    // Then
+    assert_eq!(output.status.code(), Some(1), "stderr={stderr}");
+    assert_eq!(body["category"], "missing_channel_token");
+    assert!(
+        body["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("ALLEZ_CHANNEL_TOKEN")),
+        "stderr={stderr}"
+    );
 }
 
 /// Scenario 3.1a: a denylist-filtered channel list resolving to zero
